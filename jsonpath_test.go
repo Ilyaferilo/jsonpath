@@ -96,7 +96,7 @@ func Test_jsonpath_JsonPathLookup_1(t *testing.T) {
 	if res_v, ok := res.([]interface{}); ok != true || res_v[0].(float64) != 8.95 || res_v[1].(float64) != 12.99 || res_v[2].(float64) != 8.99 || res_v[3].(float64) != 22.99 {
 		t.Errorf("exp: [8.95, 12.99, 8.99, 22.99], got: %v", res)
 	}
-	
+
 	// range
 	res, err = JsonPathLookup(json_data, "$.store.book[0:1].price")
 	t.Log(err, res)
@@ -1179,13 +1179,13 @@ func Test_jsonpath_rootnode_is_array_range(t *testing.T) {
 		t.Logf("idx: %v, v: %v", idx, v)
 	}
 	if len(ares) != 2 {
-		t.Fatal("len is not 2. got: %v", len(ares))
+		t.Fatalf("len is not 2. got: %v", len(ares))
 	}
 	if ares[0].(float64) != 12.34 {
-		t.Fatal("idx: 0, should be 12.34. got: %v", ares[0])
+		t.Fatalf("idx: 0, should be 12.34. got: %v", ares[0])
 	}
 	if ares[1].(float64) != 13.34 {
-		t.Fatal("idx: 0, should be 12.34. got: %v", ares[1])
+		t.Fatalf("idx: 0, should be 12.34. got: %v", ares[1])
 	}
 }
 
@@ -1232,7 +1232,7 @@ func Test_jsonpath_rootnode_is_nested_array_range(t *testing.T) {
 		t.Logf("idx: %v, v: %v", idx, v)
 	}
 	if len(ares) != 2 {
-		t.Fatal("len is not 2. got: %v", len(ares))
+		t.Fatalf("len is not 2. got: %v", len(ares))
 	}
 
 	//FIXME: `$[:1].[0].test` got wrong result
@@ -1242,4 +1242,60 @@ func Test_jsonpath_rootnode_is_nested_array_range(t *testing.T) {
 	//if ares[1].(float64) != 3.1 {
 	//	t.Fatal("idx: 0, should be 3.1, got: %v", ares[1])
 	//}
+}
+
+func Test_Set(t *testing.T) {
+	var data = map[string]interface{}{
+		"user": map[string]interface{}{
+			"firstname": "seth",
+			"lastname":  "rogen",
+		},
+		"age": 35,
+		"filmography": map[string]interface{}{
+			"movies": []string{
+				"This Is The End",
+				"Superbad",
+				"Neighbors",
+			},
+		},
+	}
+
+	err := Set(&data, "$.filmography.movies[2]", "The Disaster Artist")
+	if err != nil {
+		t.Errorf("failed to set filmography.movies[2]: %v", err)
+	}
+
+	secondMovie := reflect.ValueOf(data["filmography"]).MapIndex(reflect.ValueOf("movies")).Elem().Index(2).Interface()
+	if secondMovie != "The Disaster Artist" {
+		t.Errorf("set filmography.movies[2] to wrong value, wanted: %v, got %v", "The Disaster Artist", secondMovie)
+	}
+
+	newUser := map[string]interface{}{
+		"firstname": "james",
+		"lastname":  "franco",
+	}
+
+	err = Set(&data, "$.user", &newUser)
+	if err != nil {
+		t.Errorf("failed to set user: %v", err)
+	}
+	newData := map[string]interface{}{
+		"hello": 12,
+	}
+
+	err = Set(&data, "$.newData", newData)
+	if err != nil {
+		t.Errorf("failed to set: %v", err)
+	} else {
+		exist := reflect.ValueOf(data["newData"]).Interface()
+		if !reflect.DeepEqual(exist, newData) {
+			t.Errorf("setting a nonexistant field did not work well, wanted: %#v, got %#v", newData, exist)
+		}
+	}
+
+	err = Set(&data, "$.not.correct", newData)
+	if err == nil {
+		t.Errorf("incorrect set")
+	}
+
 }
