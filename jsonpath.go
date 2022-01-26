@@ -809,3 +809,58 @@ func Set(obj interface{}, path string, value interface{}) error {
 		return fmt.Errorf("could not set value at path, %s", path)
 	}
 }
+
+func Del(obj interface{}, path string) {
+	c, err := Compile(path)
+	if err != nil {
+		return
+	}
+
+	obj = followPtr(obj)
+	child := obj
+	parent := obj
+
+	lastStepIdx := len(c.steps) - 1
+
+	for i, s := range c.steps {
+		switch s.op {
+		case KeyOp:
+			child, err = get_key(parent, s.key)
+			if err != nil {
+				return
+			}
+		case IndexOp:
+			if len(s.key) > 0 {
+				// no key `$[0].test`
+				parent, err = get_key(parent, s.key)
+				if err != nil {
+					return
+				}
+			}
+			if len(s.args.([]int)) == 1 {
+				//fmt.Println("idx ----------------3")
+				child, err = get_idx(parent, s.args.([]int)[0])
+				if err != nil {
+					return
+				}
+			}
+		default:
+			return
+		}
+
+		if i != lastStepIdx {
+			parent = child
+		}
+	}
+
+	last := c.steps[lastStepIdx]
+	switch reflect.ValueOf(parent).Kind() {
+	case reflect.Map:
+		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), reflect.Value{})
+	case reflect.Slice:
+		sliceValue := reflect.ValueOf(parent)
+		idx := last.args.([]int)[0]
+		sliceValue.Index(idx).Set(reflect.Value{})
+	}
+
+}

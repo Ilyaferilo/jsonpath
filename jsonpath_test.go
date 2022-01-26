@@ -1299,3 +1299,32 @@ func Test_Set(t *testing.T) {
 	}
 
 }
+
+func Test_Del(t *testing.T) {
+	var data = map[string]interface{}{
+		"user": map[string]interface{}{
+			"firstname": "seth",
+			"lastname":  "rogen",
+		},
+		"age": 35,
+		"filmography": map[string]interface{}{
+			"movies": []string{
+				"This Is The End",
+				"Superbad",
+				"Neighbors",
+			},
+		},
+	}
+	del := func(path, field string) {
+		Del(&data, path)
+		if _, found := data[field]; found {
+			t.Errorf("field %s not deleted", field)
+		}
+	}
+	del("$.user", "user")
+	del("$.age", "age")
+
+	Del(&data, "$.filmography.movies")
+	films := data["filmography"]
+	films = films.(map[string]interface{})
+}
