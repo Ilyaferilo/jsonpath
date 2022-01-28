@@ -1316,15 +1316,17 @@ func Test_Del(t *testing.T) {
 		},
 	}
 	del := func(path, field string) {
-		Del(&data, path)
-		if _, found := data[field]; found {
+		err := Del(&data, path)
+		_, found := data[field]
+		if err != nil || found {
 			t.Errorf("field %s not deleted", field)
 		}
 	}
 	del("$.user", "user")
 	del("$.age", "age")
 
-	Del(&data, "$.filmography.movies")
-	films := data["filmography"]
-	films = films.(map[string]interface{})
+	err := Del(&data, "$.filmography.movies")
+	if err != nil {
+		t.Error(err)
+	}
 }

@@ -810,10 +810,10 @@ func Set(obj interface{}, path string, value interface{}) error {
 	}
 }
 
-func Del(obj interface{}, path string) {
+func Del(obj interface{}, path string) error {
 	c, err := Compile(path)
 	if err != nil {
-		return
+		return err
 	}
 
 	obj = followPtr(obj)
@@ -827,25 +827,25 @@ func Del(obj interface{}, path string) {
 		case KeyOp:
 			child, err = get_key(parent, s.key)
 			if err != nil {
-				return
+				return err
 			}
 		case IndexOp:
 			if len(s.key) > 0 {
 				// no key `$[0].test`
 				parent, err = get_key(parent, s.key)
 				if err != nil {
-					return
+					return err
 				}
 			}
 			if len(s.args.([]int)) == 1 {
 				//fmt.Println("idx ----------------3")
 				child, err = get_idx(parent, s.args.([]int)[0])
 				if err != nil {
-					return
+					return err
 				}
 			}
 		default:
-			return
+			return fmt.Errorf("not support del operation %s", s.op)
 		}
 
 		if i != lastStepIdx {
@@ -862,5 +862,5 @@ func Del(obj interface{}, path string) {
 		idx := last.args.([]int)[0]
 		sliceValue.Index(idx).Set(reflect.Value{})
 	}
-
+	return nil
 }
