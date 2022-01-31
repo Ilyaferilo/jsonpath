@@ -1330,3 +1330,36 @@ func Test_Del(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func Test_Append(t *testing.T) {
+	var data = map[string]interface{}{
+		"values": []int{
+			1,
+			2,
+			3,
+		},
+		"strValues": [][]string{
+			{"first", "second"},
+			{"second"},
+		},
+	}
+
+	err := Append(&data, "$.values", 4)
+	if err != nil {
+		t.Error(err)
+	}
+	values := data["values"].([]int)
+	if values[len(values)-1] != 4 {
+		t.Fail()
+	}
+
+	err = Append(&data, "$.strValues.str", "third")
+	if err == nil {
+		t.Error("founded not exists key")
+	}
+
+	err = Append(&data, "$.strValues[1]", "third")
+	if err != nil {
+		t.Error(err)
+	}
+}

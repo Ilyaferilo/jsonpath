@@ -379,6 +379,9 @@ func get_key(obj interface{}, key string) (interface{}, error) {
 				res = append(res, v)
 			}
 		}
+		if len(res) == 0 {
+			return nil, NotExist{key: key}
+		}
 		return res, nil
 	default:
 		return nil, fmt.Errorf("object is not map or slice")
@@ -863,4 +866,66 @@ func Del(obj interface{}, path string) error {
 		sliceValue.Index(idx).Set(reflect.Value{})
 	}
 	return nil
+}
+
+func Append(obj interface{}, path string, value interface{}) error {
+	c, err := Compile(path)
+	if err != nil {
+		return err
+	}
+
+	obj = followPtr(obj)
+	child := obj
+	parent := obj
+
+	lastStepIdx := len(c.steps) - 1
+
+	for i, s := range c.steps {
+		switch s.op {
+		case KeyOp:
+			child, err = get_key(parent, s.key)
+			if err != nil {
+				return err
+			}
+		case IndexOp:
+			if len(s.key) > 0 {
+				parent, err = get_key(parent, s.key)
+				if err != nil {
+					return err
+				}
+			}
+			if len(s.args.([]int)) == 1 {
+				child, err = get_idx(parent, s.args.([]int)[0])
+				if err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("not support append operation %s", s.op)
+		}
+
+		if i != lastStepIdx {
+			parent = child
+		}
+	}
+
+	last := c.steps[lastStepIdx]
+	childVal := reflect.ValueOf(child)
+	if childVal.Kind() != reflect.Slice {
+		return fmt.Errorf("not support append operation for %v", child)
+
+	}
+	newSlice := reflect.Append(childVal, reflect.ValueOf(value))
+
+	switch reflect.ValueOf(parent).Kind() {
+	case reflect.Map:
+		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), newSlice)
+	case reflect.Slice:
+		sliceValue := reflect.ValueOf(parent)
+		idx := last.args.([]int)[0]
+		sliceValue.Index(idx).Set(newSlice)
+	}
+
+	return nil
+
 }
