@@ -971,15 +971,19 @@ func Test_jsonpath_num_cmp(t *testing.T) {
 }`
 	var j interface{}
 	json.Unmarshal([]byte(data), &j)
-	res, err := JsonPathLookup(j, "$.books[?(@.price > 100)].name")
-	if err != nil {
-		t.Fatal(err)
+	_, err := JsonPathLookup(j, "$.books[?(@.price > 100)].name")
+	if err == nil {
+		t.Errorf("should return err not exist")
+		return
 	}
-	arr := res.([]interface{})
-	if len(arr) != 0 {
-		t.Fatal("should return [], got: ", arr)
+	if e, ok := err.(NotExist); ok {
+		if e.key != "name" {
+			t.Fail()
+		}
+		return
+	} else {
+		t.Errorf("should return err not exist")
 	}
-
 }
 
 func BenchmarkJsonPathLookupCompiled(b *testing.B) {
@@ -1362,4 +1366,58 @@ func Test_Append(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+}
+
+func Test_GetWildcard(t *testing.T) {
+
+	data := map[string]interface{}{
+		"values": []int{
+			1,
+			2,
+			3,
+		},
+		"strValues": [][]string{
+			{"first", "second"},
+			{"second"},
+		},
+	}
+	p, _ := Compile("$")
+	d, err := p.Lookup(&data)
+	if err != nil {
+		t.Error(err)
+	}
+	if !reflect.DeepEqual(*d.(*map[string]interface{}), data) {
+		t.Fail()
+	}
+
+	p, _ = Compile("$.values*")
+}
+
+func Test_GetNameWithDots(t *testing.T) {
+
+	data := map[string]interface{}{
+		"values.wi:th/Dot": []int{
+			1,
+			2,
+			3,
+		},
+		"strValues": [][]string{
+			{"first", "second"},
+			{"second"},
+		},
+	}
+	p, err := Compile("$['values.wi:th/Dot'][1]")
+	if err != nil {
+		t.Error(err)
+	}
+	v, err := p.Lookup(&data)
+	if err != nil {
+		t.Error(err)
+	}
+	if v.(int) != 2 {
+		t.Fail()
+	}
+	// if !reflect.DeepEqual(*d.(*map[string]interface{}), data) {
+	// 	t.Fail()
+	// }
 }

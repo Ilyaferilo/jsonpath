@@ -26,7 +26,7 @@ type NotExist struct {
 }
 
 func (d NotExist) Error() string {
-	return fmt.Sprintf("key error: %s not found in object", d.key)
+	return fmt.Sprintf("key error: \"%s\" not found in object", d.key)
 }
 
 func JsonPathLookup(obj interface{}, jpath string) (interface{}, error) {
@@ -148,6 +148,8 @@ func (c *Compiled) Lookup(obj interface{}) (interface{}, error) {
 			if err != nil {
 				return nil, err
 			}
+		case "scan":
+			return obj, nil
 		default:
 			return nil, fmt.Errorf("expression don't support in filter")
 		}
@@ -253,7 +255,10 @@ func parse_token(token string) (op string, key string, args interface{}, err err
 		}
 		tail = tail[1 : len(tail)-1]
 
-		//fmt.Println(key, tail)
+		// for ['some.key']
+		if tail[0] == 39 {
+			return "key", tail[1 : len(tail)-1], nil, nil
+		}
 		if strings.Contains(tail, "?") {
 			// filter -------------------------------------------------
 			op = "filter"
@@ -351,7 +356,9 @@ func get_key(obj interface{}, key string) (interface{}, error) {
 	if reflect.TypeOf(obj) == nil {
 		return nil, ErrGetFromNullObj
 	}
-	switch reflect.TypeOf(obj).Kind() {
+	obj = followPtr(obj)
+	objType := reflect.TypeOf(obj)
+	switch objType.Kind() {
 	case reflect.Map:
 		// if obj came from stdlib json, its highly likely to be a map[string]interface{}
 		// in which case we can save having to iterate the map keys to work out if the
