@@ -83,13 +83,34 @@ func (c *Compiled) String() string {
 	return fmt.Sprintf("Compiled lookup: %s", c.path)
 }
 
+// lookupKey find key and return object by key.
+// If step contain subkey then child object of founded object will be returned by subkey
+func (c *Compiled) lookupKey(obj interface{}, s step) (interface{}, error) {
+	subKey, ok := s.args.(string)
+	if !ok {
+		subKey = ""
+	}
+	if s.key == "" && subKey != "" {
+		s.key = subKey
+		subKey = ""
+	}
+	obj, err := get_key(obj, s.key)
+	if err != nil {
+		return nil, err
+	}
+	if subKey != "" {
+		obj, err = get_key(obj, subKey)
+	}
+	return obj, err
+}
+
 func (c *Compiled) Lookup(obj interface{}) (interface{}, error) {
 	var err error
 	for _, s := range c.steps {
 		// "key", "idx"
 		switch s.op {
 		case KeyOp:
-			obj, err = get_key(obj, s.key)
+			obj, err = c.lookupKey(obj, s)
 			if err != nil {
 				return nil, err
 			}
@@ -257,7 +278,7 @@ func parse_token(token string) (op string, key string, args interface{}, err err
 
 		// for ['some.key']
 		if tail[0] == 39 {
-			return "key", tail[1 : len(tail)-1], nil, nil
+			return "key", key, tail[1 : len(tail)-1], nil
 		}
 		if strings.Contains(tail, "?") {
 			// filter -------------------------------------------------
