@@ -1390,7 +1390,10 @@ func Test_GetWildcard(t *testing.T) {
 		t.Fail()
 	}
 
-	p, _ = Compile("$.values*")
+	if _, err = Compile("$.values*"); err != nil {
+		t.Error(err)
+	}
+
 }
 
 func Test_GetNameWithDots(t *testing.T) {
@@ -1401,12 +1404,16 @@ func Test_GetNameWithDots(t *testing.T) {
 			2,
 			3,
 		},
+		"second": map[string]int{
+			"sec.1": 1,
+			"sec.3": 3,
+		},
 		"strValues": [][]string{
 			{"first", "second"},
 			{"second"},
 		},
 	}
-	p, err := Compile("$['values.wi:th/Dot'][1]")
+	p, err := Compile("$.['values.wi:th/Dot'][1]")
 	if err != nil {
 		t.Error(err)
 	}
@@ -1417,7 +1424,18 @@ func Test_GetNameWithDots(t *testing.T) {
 	if v.(int) != 2 {
 		t.Fail()
 	}
-	// if !reflect.DeepEqual(*d.(*map[string]interface{}), data) {
-	// 	t.Fail()
-	// }
+
+	p, err = Compile("$.second['sec.1']")
+	if err != nil {
+		t.Error(err)
+	}
+
+	v, err = p.Lookup(&data)
+	if err != nil {
+		t.Error(err)
+	}
+	if v.(int) != 1 {
+		t.Fail()
+	}
+
 }
