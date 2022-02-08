@@ -254,6 +254,10 @@ func tokenize(query string) ([]string, error) {
 	return tokens, nil
 }
 
+func checkFilter(filter string) bool {
+	return strings.HasPrefix(filter, "@.") || strings.HasPrefix(filter, "$.")
+}
+
 /*
  op: "root", "key", "idx", "range", "filter", "scan"
 */
@@ -287,10 +291,14 @@ func parse_token(token string) (op string, key string, args interface{}, err err
 			first := strings.Index(tail, "(")
 			last := strings.LastIndex(tail, ")")
 			if first == -1 || last == -1 {
-				err = fmt.Errorf("invalid filter: %v", tail)
+				err = fmt.Errorf("invalid filter must contains parenthesis: %v", tail)
 				op = ""
 			} else {
-				args = strings.TrimSpace(tail[first+1 : last])
+				filter := strings.TrimSpace(tail[first+1 : last])
+				if !checkFilter(filter) {
+					err = fmt.Errorf("invalid filter: %v", tail)
+				}
+				args = filter
 			}
 			return
 		} else if strings.Contains(tail, ":") {
@@ -692,15 +700,13 @@ func eval_reg_filter(obj, root interface{}, lp string, pat *regexp.Regexp) (res 
 }
 
 func get_lp_v(obj, root interface{}, lp string) (interface{}, error) {
-	var lp_v interface{}
 	if strings.HasPrefix(lp, "@.") {
 		return filter_get_from_explicit_path(obj, lp)
 	} else if strings.HasPrefix(lp, "$.") {
 		return filter_get_from_explicit_path(root, lp)
 	} else {
-		lp_v = lp
+		return nil, fmt.Errorf("invalid filter %s", lp)
 	}
-	return lp_v, nil
 }
 
 func eval_filter(obj, root interface{}, lp, op, rp string) (res bool, err error) {
