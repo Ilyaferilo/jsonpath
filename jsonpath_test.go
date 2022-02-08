@@ -15,6 +15,7 @@ var json_data interface{}
 func init() {
 	data := `
 {
+	"main": "bicycle",
     "store": {
         "book": [
             {
@@ -138,6 +139,9 @@ func Test_jsonpath_JsonPathLookup_filter(t *testing.T) {
 	res, err = JsonPathLookup(json_data, "$.store.book[?(@.price > $.expensive)].price")
 	t.Log(err, res)
 	res, err = JsonPathLookup(json_data, "$.store.book[?(@.price < $.expensive)].price")
+	t.Log(err, res)
+
+	res, err = JsonPathLookup(json_data, "$.store[?($.main)]")
 	t.Log(err, res)
 }
 
@@ -392,7 +396,7 @@ func Test_jsonpath_parse_token(t *testing.T) {
 			if args_v, ok := args.(string); ok == true {
 				fmt.Println(args_v)
 				if exp_args.(string) != args_v {
-					t.Errorf("len(args) not expected: (got)%v != (exp)%v", len(args_v), len(exp_args.([]string)))
+					t.Errorf("len(args) not expected: (got)%v != (exp)%v", len(args_v), len(exp_args.(string)))
 					return
 				}
 
@@ -1437,5 +1441,21 @@ func Test_GetNameWithDots(t *testing.T) {
 	if v.(int) != 1 {
 		t.Fail()
 	}
+
+}
+
+func Test_LookupBadQuery(t *testing.T) {
+
+	res, err := JsonPathLookup(json_data, "$.store[?($.main) ]");
+	if err != nil{
+		t.Error(err)
+	}
+	t.Log(res)
+
+	res, err = JsonPathLookup(json_data, "$.store[?]");
+	if err == nil{
+		t.Fail()
+	}
+	t.Log(res)
 
 }

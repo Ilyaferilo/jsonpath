@@ -104,7 +104,8 @@ func (c *Compiled) lookupKey(obj interface{}, s step) (interface{}, error) {
 	return obj, err
 }
 
-func (c *Compiled) Lookup(obj interface{}) (interface{}, error) {
+func (c *Compiled) Lookup(rootObj interface{}) (interface{}, error) {
+	obj := rootObj
 	var err error
 	for _, s := range c.steps {
 		// "key", "idx"
@@ -165,7 +166,7 @@ func (c *Compiled) Lookup(obj interface{}) (interface{}, error) {
 			if err != nil {
 				return nil, err
 			}
-			obj, err = get_filtered(obj, obj, s.args.(string))
+			obj, err = get_filtered(obj, rootObj, s.args.(string))
 			if err != nil {
 				return nil, err
 			}
@@ -282,14 +283,19 @@ func parse_token(token string) (op string, key string, args interface{}, err err
 		}
 		if strings.Contains(tail, "?") {
 			// filter -------------------------------------------------
-			op = "filter"
-			if strings.HasPrefix(tail, "?(") && strings.HasSuffix(tail, ")") {
-				args = strings.Trim(tail[2:len(tail)-1], " ")
+			op = FilterOp
+			first := strings.Index(tail, "(")
+			last := strings.LastIndex(tail, ")")
+			if first == -1 || last == -1 {
+				err = fmt.Errorf("invalid filter: %v", tail)
+				op = ""
+			} else {
+				args = strings.TrimSpace(tail[first+1 : last])
 			}
 			return
 		} else if strings.Contains(tail, ":") {
 			// range ----------------------------------------------
-			op = "range"
+			op = RangeOp
 			tails := strings.Split(tail, ":")
 			if len(tails) != 2 {
 				err = fmt.Errorf("only support one range(from, to): %v", tails)
@@ -312,12 +318,12 @@ func parse_token(token string) (op string, key string, args interface{}, err err
 			args = [2]interface{}{frm, to}
 			return
 		} else if tail == "*" {
-			op = "range"
+			op = RangeOp
 			args = [2]interface{}{nil, nil}
 			return
 		} else {
 			// idx ------------------------------------------------
-			op = "idx"
+			op = IndexOp
 			res := []int{}
 			for _, x := range strings.Split(tail, ",") {
 				if i, err := strconv.Atoi(strings.Trim(x, " ")); err == nil {
@@ -741,7 +747,7 @@ func cmp_any(obj1, obj2 interface{}, op string) (bool, error) {
 	switch op {
 	case "<", "<=", "==", ">=", ">":
 	default:
-		return false, fmt.Errorf("op should only be <, <=, ==, >= and >")
+		return false, fmt.Errorf("invalid filter operation \"%s\";should be one of: <, <=, ==, >= and >", op)
 	}
 
 	var exp string
