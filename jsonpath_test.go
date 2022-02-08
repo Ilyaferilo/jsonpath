@@ -142,6 +142,8 @@ func Test_jsonpath_JsonPathLookup_filter(t *testing.T) {
 	t.Log(err, res)
 
 	res, err = JsonPathLookup(json_data, "$.store[?($.main)]")
+	// res.map[string]interface{}
+	// "color"
 	t.Log(err, res)
 }
 
@@ -1446,16 +1448,25 @@ func Test_GetNameWithDots(t *testing.T) {
 
 func Test_LookupBadQuery(t *testing.T) {
 
-	res, err := JsonPathLookup(json_data, "$.store[?($.main) ]");
-	if err != nil{
-		t.Error(err)
-	}
-	t.Log(res)
-
-	res, err = JsonPathLookup(json_data, "$.store[?]");
-	if err == nil{
+	res, err := JsonPathLookup(json_data, "$.store[?]")
+	if err == nil {
 		t.Fail()
 	}
 	t.Log(res)
+}
 
+func Test_LookupExpresion(t *testing.T) {
+
+	res, err := JsonPathLookup(json_data, "$.store[($.main)]")
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	t.Log(res)
+	m, ok := res.(map[string]interface{})
+	if !ok {
+		t.Fail()
+	}
+	if _, ok := m["color"]; !ok {
+		t.Fail()
+	}
 }

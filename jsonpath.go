@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	KeyOp    = "key"
-	IndexOp  = "idx"
-	RangeOp  = "range"
-	FilterOp = "filter"
+	KeyOp        = "key"
+	IndexOp      = "idx"
+	RangeOp      = "range"
+	FilterOp     = "filter"
+	ExpressionOp = "expression"
 )
 
 var ErrGetFromNullObj = errors.New("get attribute from null object")
@@ -85,7 +86,7 @@ func (c *Compiled) String() string {
 
 // lookupKey find key and return object by key.
 // If step contain subkey then child object of founded object will be returned by subkey
-func (c *Compiled) lookupKey(obj interface{}, s step) (interface{}, error) {
+func lookupKey(obj interface{}, s step) (interface{}, error) {
 	subKey, ok := s.args.(string)
 	if !ok {
 		subKey = ""
@@ -104,6 +105,25 @@ func (c *Compiled) lookupKey(obj interface{}, s step) (interface{}, error) {
 	return obj, err
 }
 
+func lookupExpression(obj, rootObj interface{}, s step) (interface{}, error) {
+	obj, err := get_key(obj, s.key)
+	if err != nil {
+		return nil, err
+	}
+	key, err := get_lp_v(obj, rootObj, s.args.(string))
+	if err != nil {
+		return nil, err
+	}
+	switch v := key.(type) {
+	case string:
+		return get_key(obj, v)
+	case int:
+		return get_idx(obj, v)
+	default:
+		return nil, fmt.Errorf("extracted invalid expression: %v", v)
+	}
+}
+
 func (c *Compiled) Lookup(rootObj interface{}) (interface{}, error) {
 	obj := rootObj
 	var err error
@@ -111,7 +131,7 @@ func (c *Compiled) Lookup(rootObj interface{}) (interface{}, error) {
 		// "key", "idx"
 		switch s.op {
 		case KeyOp:
-			obj, err = c.lookupKey(obj, s)
+			obj, err = lookupKey(obj, s)
 			if err != nil {
 				return nil, err
 			}
@@ -167,6 +187,11 @@ func (c *Compiled) Lookup(rootObj interface{}) (interface{}, error) {
 				return nil, err
 			}
 			obj, err = get_filtered(obj, rootObj, s.args.(string))
+			if err != nil {
+				return nil, err
+			}
+		case ExpressionOp:
+			obj, err = lookupExpression(obj, rootObj, s)
 			if err != nil {
 				return nil, err
 			}
@@ -258,6 +283,18 @@ func checkFilter(filter string) bool {
 	return strings.HasPrefix(filter, "@.") || strings.HasPrefix(filter, "$.")
 }
 
+// token is something like [(...)]
+func extractExpression(expr string) (string, bool) {
+	first := strings.Index(expr, "(")
+	last := strings.LastIndex(expr, ")")
+	if first == -1 || last == -1 {
+		return "", false
+	}
+	expr = strings.TrimSpace(expr[first+1 : last])
+	return expr, checkFilter(expr)
+
+}
+
 /*
  op: "root", "key", "idx", "range", "filter", "scan"
 */
@@ -300,6 +337,11 @@ func parse_token(token string) (op string, key string, args interface{}, err err
 				}
 				args = filter
 			}
+			return
+		} else if expr, ok := extractExpression(tail); ok {
+			// expression ----------------------------------------------
+			op = ExpressionOp
+			args = expr
 			return
 		} else if strings.Contains(tail, ":") {
 			// range ----------------------------------------------
