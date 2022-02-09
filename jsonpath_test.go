@@ -1453,6 +1453,11 @@ func Test_LookupBadQuery(t *testing.T) {
 		t.Fail()
 	}
 	t.Log(res)
+	res, err = JsonPathLookup(json_data, "$.store[']")
+	if err == nil {
+		t.Fail()
+	}
+	t.Log(res, err)
 }
 
 func Test_LookupExpresion(t *testing.T) {

@@ -319,7 +319,7 @@ func parse_token(token string) (op string, key string, args interface{}, err err
 		tail = tail[1 : len(tail)-1]
 
 		// for ['some.key']
-		if tail[0] == 39 {
+		if tail[0] == 39 && len(tail) > 2{
 			return "key", key, tail[1 : len(tail)-1], nil
 		}
 		if strings.Contains(tail, "?") {
