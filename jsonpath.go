@@ -11,7 +11,24 @@ import (
 	"strings"
 )
 
+const (
+	KeyOp        = "key"
+	IndexOp      = "idx"
+	RangeOp      = "range"
+	FilterOp     = "filter"
+	ExpressionOp = "expression"
+)
+
 var ErrGetFromNullObj = errors.New("get attribute from null object")
+
+// NotExist is returned by jsonpath.Get on nonexistent paths
+type NotExist struct {
+	key string
+}
+
+func (d NotExist) Error() string {
+	return fmt.Sprintf("key error: \"%s\" not found in object", d.key)
+}
 
 func JsonPathLookup(obj interface{}, jpath string) (interface{}, error) {
 	c, err := Compile(jpath)
@@ -32,6 +49,7 @@ type step struct {
 	args interface{}
 }
 
+// MustCompile panic if jpath incorrect
 func MustCompile(jpath string) *Compiled {
 	c, err := Compile(jpath)
 	if err != nil {
@@ -40,6 +58,7 @@ func MustCompile(jpath string) *Compiled {
 	return c
 }
 
+// Compile jpath to tokens
 func Compile(jpath string) (*Compiled, error) {
 	tokens, err := tokenize(jpath)
 	if err != nil {
@@ -67,17 +86,58 @@ func (c *Compiled) String() string {
 	return fmt.Sprintf("Compiled lookup: %s", c.path)
 }
 
-func (c *Compiled) Lookup(obj interface{}) (interface{}, error) {
+// lookupKey find key and return object by key.
+// If step contain subkey then child object of founded object will be returned by subkey
+func lookupKey(obj interface{}, s step) (interface{}, error) {
+	subKey, ok := s.args.(string)
+	if !ok {
+		subKey = ""
+	}
+	if s.key == "" && subKey != "" {
+		s.key = subKey
+		subKey = ""
+	}
+	obj, err := get_key(obj, s.key)
+	if err != nil {
+		return nil, err
+	}
+	if subKey != "" {
+		obj, err = get_key(obj, subKey)
+	}
+	return obj, err
+}
+
+func lookupExpression(obj, rootObj interface{}, s step) (interface{}, error) {
+	obj, err := get_key(obj, s.key)
+	if err != nil {
+		return nil, err
+	}
+	key, err := get_lp_v(obj, rootObj, s.args.(string))
+	if err != nil {
+		return nil, err
+	}
+	switch v := key.(type) {
+	case string:
+		return get_key(obj, v)
+	case int:
+		return get_idx(obj, v)
+	default:
+		return nil, fmt.Errorf("extracted invalid expression: %v", v)
+	}
+}
+
+func (c *Compiled) Lookup(rootObj interface{}) (interface{}, error) {
+	obj := rootObj
 	var err error
 	for _, s := range c.steps {
 		// "key", "idx"
 		switch s.op {
-		case "key":
-			obj, err = get_key(obj, s.key)
+		case KeyOp:
+			obj, err = lookupKey(obj, s)
 			if err != nil {
 				return nil, err
 			}
-		case "idx":
+		case IndexOp:
 			if len(s.key) > 0 {
 				// no key `$[0].test`
 				obj, err = get_key(obj, s.key)
@@ -107,7 +167,7 @@ func (c *Compiled) Lookup(obj interface{}) (interface{}, error) {
 				//fmt.Println("idx ----------------4")
 				return nil, fmt.Errorf("cannot index on empty slice")
 			}
-		case "range":
+		case RangeOp:
 			if len(s.key) > 0 {
 				// no key `$[:1].test`
 				obj, err = get_key(obj, s.key)
@@ -115,7 +175,7 @@ func (c *Compiled) Lookup(obj interface{}) (interface{}, error) {
 					return nil, err
 				}
 			}
-			if argsv, ok := s.args.([2]interface{}); ok == true {
+			if argsv, ok := s.args.([2]interface{}); ok {
 				obj, err = get_range(obj, argsv[0], argsv[1])
 				if err != nil {
 					return nil, err
@@ -123,15 +183,22 @@ func (c *Compiled) Lookup(obj interface{}) (interface{}, error) {
 			} else {
 				return nil, fmt.Errorf("range args length should be 2")
 			}
-		case "filter":
+		case FilterOp:
 			obj, err = get_key(obj, s.key)
 			if err != nil {
 				return nil, err
 			}
-			obj, err = get_filtered(obj, obj, s.args.(string))
+			obj, err = get_filtered(obj, rootObj, s.args.(string))
 			if err != nil {
 				return nil, err
 			}
+		case ExpressionOp:
+			obj, err = lookupExpression(obj, rootObj, s)
+			if err != nil {
+				return nil, err
+			}
+		case "scan":
+			return obj, nil
 		default:
 			return nil, fmt.Errorf("expression don't support in filter")
 		}
@@ -214,6 +281,22 @@ func tokenize(query string) ([]string, error) {
 	return tokens, nil
 }
 
+func checkFilter(filter string) bool {
+	return strings.HasPrefix(filter, "@.") || strings.HasPrefix(filter, "$.")
+}
+
+// token is something like [(...)]
+func extractExpression(expr string) (string, bool) {
+	first := strings.Index(expr, "(")
+	last := strings.LastIndex(expr, ")")
+	if first == -1 || last == -1 {
+		return "", false
+	}
+	expr = strings.TrimSpace(expr[first+1 : last])
+	return expr, checkFilter(expr)
+
+}
+
 /*
  op: "root", "key", "idx", "range", "filter", "scan"
 */
@@ -237,17 +320,34 @@ func parse_token(token string) (op string, key string, args interface{}, err err
 		}
 		tail = tail[1 : len(tail)-1]
 
-		//fmt.Println(key, tail)
+		// for ['some.key']
+		if tail[0] == 39 && len(tail) > 2 {
+			return "key", key, tail[1 : len(tail)-1], nil
+		}
 		if strings.Contains(tail, "?") {
 			// filter -------------------------------------------------
-			op = "filter"
-			if strings.HasPrefix(tail, "?(") && strings.HasSuffix(tail, ")") {
-				args = strings.Trim(tail[2:len(tail)-1], " ")
+			op = FilterOp
+			first := strings.Index(tail, "(")
+			last := strings.LastIndex(tail, ")")
+			if first == -1 || last == -1 {
+				err = fmt.Errorf("invalid filter must contains parenthesis: %v", tail)
+				op = ""
+			} else {
+				filter := strings.TrimSpace(tail[first+1 : last])
+				if !checkFilter(filter) {
+					err = fmt.Errorf("invalid filter: %v", tail)
+				}
+				args = filter
 			}
+			return
+		} else if expr, ok := extractExpression(tail); ok {
+			// expression ----------------------------------------------
+			op = ExpressionOp
+			args = expr
 			return
 		} else if strings.Contains(tail, ":") {
 			// range ----------------------------------------------
-			op = "range"
+			op = RangeOp
 			tails := strings.Split(tail, ":")
 			if len(tails) != 2 {
 				err = fmt.Errorf("only support one range(from, to): %v", tails)
@@ -270,12 +370,12 @@ func parse_token(token string) (op string, key string, args interface{}, err err
 			args = [2]interface{}{frm, to}
 			return
 		} else if tail == "*" {
-			op = "range"
+			op = RangeOp
 			args = [2]interface{}{nil, nil}
 			return
 		} else {
 			// idx ------------------------------------------------
-			op = "idx"
+			op = IndexOp
 			res := []int{}
 			for _, x := range strings.Split(tail, ",") {
 				if i, err := strconv.Atoi(strings.Trim(x, " ")); err == nil {
@@ -307,12 +407,12 @@ func filter_get_from_explicit_path(obj interface{}, path string) (interface{}, e
 		op, key, args, err := parse_token(s)
 		// "key", "idx"
 		switch op {
-		case "key":
+		case KeyOp:
 			xobj, err = get_key(xobj, key)
 			if err != nil {
 				return nil, err
 			}
-		case "idx":
+		case IndexOp:
 			if len(args.([]int)) != 1 {
 				return nil, fmt.Errorf("don't support multiple index in filter")
 			}
@@ -335,7 +435,9 @@ func get_key(obj interface{}, key string) (interface{}, error) {
 	if reflect.TypeOf(obj) == nil {
 		return nil, ErrGetFromNullObj
 	}
-	switch reflect.TypeOf(obj).Kind() {
+	obj = followPtr(obj)
+	objType := reflect.TypeOf(obj)
+	switch objType.Kind() {
 	case reflect.Map:
 		// if obj came from stdlib json, its highly likely to be a map[string]interface{}
 		// in which case we can save having to iterate the map keys to work out if the
@@ -343,7 +445,7 @@ func get_key(obj interface{}, key string) (interface{}, error) {
 		if jsonMap, ok := obj.(map[string]interface{}); ok {
 			val, exists := jsonMap[key]
 			if !exists {
-				return nil, fmt.Errorf("key error: %s not found in object", key)
+				return nil, NotExist{key: key}
 			}
 			return val, nil
 		}
@@ -353,7 +455,7 @@ func get_key(obj interface{}, key string) (interface{}, error) {
 				return reflect.ValueOf(obj).MapIndex(kv).Interface(), nil
 			}
 		}
-		return nil, fmt.Errorf("key error: %s not found in object", key)
+		return nil, NotExist{key: key}
 	case reflect.Slice:
 		// slice we should get from all objects in it.
 		res := []interface{}{}
@@ -363,31 +465,32 @@ func get_key(obj interface{}, key string) (interface{}, error) {
 				res = append(res, v)
 			}
 		}
+		if len(res) == 0 {
+			return nil, NotExist{key: key}
+		}
 		return res, nil
 	default:
-		return nil, fmt.Errorf("object is not map")
+		return nil, fmt.Errorf("object is not map or slice")
 	}
 }
 
 func get_idx(obj interface{}, idx int) (interface{}, error) {
-	switch reflect.TypeOf(obj).Kind() {
-	case reflect.Slice:
-		length := reflect.ValueOf(obj).Len()
-		if idx >= 0 {
-			if idx >= length {
-				return nil, fmt.Errorf("index out of range: len: %v, idx: %v", length, idx)
-			}
-			return reflect.ValueOf(obj).Index(idx).Interface(), nil
-		} else {
-			// < 0
-			_idx := length + idx
-			if _idx < 0 {
-				return nil, fmt.Errorf("index out of range: len: %v, idx: %v", length, idx)
-			}
-			return reflect.ValueOf(obj).Index(_idx).Interface(), nil
-		}
-	default:
+	if reflect.TypeOf(obj).Kind() != reflect.Slice {
 		return nil, fmt.Errorf("object is not Slice")
+	}
+	length := reflect.ValueOf(obj).Len()
+	if idx >= 0 {
+		if idx >= length {
+			return nil, fmt.Errorf("index out of range: len: %v, idx: %v", length, idx)
+		}
+		return reflect.ValueOf(obj).Index(idx).Interface(), nil
+	} else {
+		// < 0
+		_idx := length + idx
+		if _idx < 0 {
+			return nil, fmt.Errorf("index out of range: len: %v, idx: %v", length, idx)
+		}
+		return reflect.ValueOf(obj).Index(_idx).Interface(), nil
 	}
 }
 
@@ -403,14 +506,14 @@ func get_range(obj, frm, to interface{}) (interface{}, error) {
 		if to == nil {
 			to = length - 1
 		}
-		if fv, ok := frm.(int); ok == true {
+		if fv, ok := frm.(int); ok {
 			if fv < 0 {
 				_frm = length + fv
 			} else {
 				_frm = fv
 			}
 		}
-		if tv, ok := to.(int); ok == true {
+		if tv, ok := to.(int); ok {
 			if tv < 0 {
 				_to = length + tv + 1
 			} else {
@@ -467,7 +570,7 @@ func get_filtered(obj, root interface{}, filter string) ([]interface{}, error) {
 				if err != nil {
 					return nil, err
 				}
-				if ok == true {
+				if ok {
 					res = append(res, tmp)
 				}
 			}
@@ -478,7 +581,7 @@ func get_filtered(obj, root interface{}, filter string) ([]interface{}, error) {
 				if err != nil {
 					return nil, err
 				}
-				if ok == true {
+				if ok {
 					res = append(res, tmp)
 				}
 			}
@@ -498,7 +601,7 @@ func get_filtered(obj, root interface{}, filter string) ([]interface{}, error) {
 				if err != nil {
 					return nil, err
 				}
-				if ok == true {
+				if ok {
 					res = append(res, tmp)
 				}
 			}
@@ -509,7 +612,7 @@ func get_filtered(obj, root interface{}, filter string) ([]interface{}, error) {
 				if err != nil {
 					return nil, err
 				}
-				if ok == true {
+				if ok {
 					res = append(res, tmp)
 				}
 			}
@@ -534,7 +637,7 @@ func parse_filter(filter string) (lp string, op string, rp string, err error) {
 	for idx, c := range filter {
 		switch c {
 		case '\'':
-			if str_embrace == false {
+			if !str_embrace {
 				str_embrace = true
 			} else {
 				switch stage {
@@ -548,7 +651,7 @@ func parse_filter(filter string) (lp string, op string, rp string, err error) {
 				tmp = ""
 			}
 		case ' ':
-			if str_embrace == true {
+			if str_embrace {
 				tmp += string(c)
 				continue
 			}
@@ -564,7 +667,7 @@ func parse_filter(filter string) (lp string, op string, rp string, err error) {
 
 			stage += 1
 			if stage > 2 {
-				return "", "", "", errors.New(fmt.Sprintf("invalid char at %d: `%c`", idx, c))
+				return "", "", "", fmt.Errorf(fmt.Sprintf("invalid char at %d: `%c`", idx, c))
 			}
 		default:
 			tmp += string(c)
@@ -580,45 +683,6 @@ func parse_filter(filter string) (lp string, op string, rp string, err error) {
 		case 2:
 			rp = tmp
 		}
-		tmp = ""
-	}
-	return lp, op, rp, err
-}
-
-func parse_filter_v1(filter string) (lp string, op string, rp string, err error) {
-	tmp := ""
-	istoken := false
-	for _, c := range filter {
-		if istoken == false && c != ' ' {
-			istoken = true
-		}
-		if istoken == true && c == ' ' {
-			istoken = false
-		}
-		if istoken == true {
-			tmp += string(c)
-		}
-		if istoken == false && tmp != "" {
-			if lp == "" {
-				lp = tmp[:]
-				tmp = ""
-			} else if op == "" {
-				op = tmp[:]
-				tmp = ""
-			} else if rp == "" {
-				rp = tmp[:]
-				tmp = ""
-			}
-		}
-	}
-	if tmp != "" && lp == "" && op == "" && rp == "" {
-		lp = tmp[:]
-		op = "exists"
-		rp = ""
-		err = nil
-		return
-	} else if tmp != "" && rp == "" {
-		rp = tmp[:]
 		tmp = ""
 	}
 	return lp, op, rp, err
@@ -641,15 +705,13 @@ func eval_reg_filter(obj, root interface{}, lp string, pat *regexp.Regexp) (res 
 }
 
 func get_lp_v(obj, root interface{}, lp string) (interface{}, error) {
-	var lp_v interface{}
 	if strings.HasPrefix(lp, "@.") {
 		return filter_get_from_explicit_path(obj, lp)
 	} else if strings.HasPrefix(lp, "$.") {
 		return filter_get_from_explicit_path(root, lp)
 	} else {
-		lp_v = lp
+		return nil, fmt.Errorf("invalid filter %s", lp)
 	}
-	return lp_v, nil
 }
 
 func eval_filter(obj, root interface{}, lp, op, rp string) (res bool, err error) {
@@ -669,7 +731,7 @@ func eval_filter(obj, root interface{}, lp, op, rp string) (res bool, err error)
 			rp_v = rp
 		}
 		//fmt.Printf("lp_v: %v, rp_v: %v\n", lp_v, rp_v)
-		return cmp_any(lp_v, rp_v, op)
+		return cmpAny(lp_v, rp_v, op)
 	}
 }
 
@@ -683,20 +745,17 @@ func isNumber(o interface{}) bool {
 		return true
 	case string:
 		_, err := strconv.ParseFloat(v, 64)
-		if err == nil {
-			return true
-		} else {
-			return false
-		}
+		return err == nil
+	default:
+		return false
 	}
-	return false
 }
 
-func cmp_any(obj1, obj2 interface{}, op string) (bool, error) {
+func cmpAny(obj1, obj2 interface{}, op string) (bool, error) {
 	switch op {
 	case "<", "<=", "==", ">=", ">":
 	default:
-		return false, fmt.Errorf("op should only be <, <=, ==, >= and >")
+		return false, fmt.Errorf("invalid filter operation \"%s\";should be one of: <, <=, ==, >= and >", op)
 	}
 
 	var exp string
@@ -711,7 +770,7 @@ func cmp_any(obj1, obj2 interface{}, op string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if res.IsValue() == false || (res.Value.String() != "false" && res.Value.String() != "true") {
+	if !res.IsValue() || (res.Value.String() != "false" && res.Value.String() != "true") {
 		return false, fmt.Errorf("result should only be true or false")
 	}
 	if res.Value.String() == "true" {
@@ -719,4 +778,199 @@ func cmp_any(obj1, obj2 interface{}, op string) (bool, error) {
 	}
 
 	return false, nil
+}
+
+func followPtr(data interface{}) interface{} {
+	rv := reflect.ValueOf(data)
+	for rv.Kind() == reflect.Ptr {
+		rv = rv.Elem()
+	}
+	return rv.Interface()
+}
+
+// Set value for obj by path
+func Set(obj interface{}, path string, value interface{}) error {
+	c, err := Compile(path)
+	if err != nil {
+		return err
+	}
+
+	obj = followPtr(obj)
+	value = followPtr(value)
+
+	child := obj
+	parent := obj
+
+	lastStepIdx := len(c.steps) - 1
+
+	for i, s := range c.steps {
+		switch s.op {
+		case KeyOp:
+			child, err = get_key(parent, s.key)
+			if err != nil {
+				if _, ok := err.(NotExist); !ok && err != ErrGetFromNullObj {
+					return err
+				}
+				if i != lastStepIdx {
+					return fmt.Errorf("incorrect set path %s", path)
+				}
+			}
+
+		case IndexOp:
+			if len(s.key) > 0 {
+				// no key `$[0].test`
+				parent, err = get_key(parent, s.key)
+				if err != nil {
+					return err
+				}
+			}
+			if len(s.args.([]int)) == 1 {
+				//fmt.Println("idx ----------------3")
+				child, err = get_idx(parent, s.args.([]int)[0])
+				if err != nil {
+					return err
+				}
+			}
+
+		default:
+			return fmt.Errorf("%s expression don't support in set", s.op)
+		}
+
+		if i != lastStepIdx {
+			parent = child
+		}
+	}
+
+	last := c.steps[lastStepIdx]
+	switch reflect.ValueOf(parent).Kind() {
+	case reflect.Map:
+		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), reflect.ValueOf(value))
+		return nil
+	case reflect.Slice:
+		sliceValue := reflect.ValueOf(parent)
+		idx := last.args.([]int)[0]
+		sliceValue.Index(idx).Set(reflect.ValueOf(value))
+		return nil
+	default:
+		return fmt.Errorf("could not set value at path, %s", path)
+	}
+}
+
+// Del from object by path
+func Del(obj interface{}, path string) error {
+	c, err := Compile(path)
+	if err != nil {
+		return err
+	}
+
+	obj = followPtr(obj)
+	child := obj
+	parent := obj
+
+	lastStepIdx := len(c.steps) - 1
+
+	for i, s := range c.steps {
+		switch s.op {
+		case KeyOp:
+			child, err = get_key(parent, s.key)
+			if err != nil {
+				return err
+			}
+		case IndexOp:
+			if len(s.key) > 0 {
+				// no key `$[0].test`
+				parent, err = get_key(parent, s.key)
+				if err != nil {
+					return err
+				}
+			}
+			if len(s.args.([]int)) == 1 {
+				//fmt.Println("idx ----------------3")
+				child, err = get_idx(parent, s.args.([]int)[0])
+				if err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("not supported del operation %s", s.op)
+		}
+
+		if i != lastStepIdx {
+			parent = child
+		}
+	}
+
+	last := c.steps[lastStepIdx]
+	switch reflect.ValueOf(parent).Kind() {
+	case reflect.Map:
+		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), reflect.Value{})
+	case reflect.Slice:
+		sliceValue := reflect.ValueOf(parent)
+		idx := last.args.([]int)[0]
+		sliceValue.Index(idx).Set(reflect.Value{})
+	}
+	return nil
+}
+
+// Append value to object by path
+func Append(obj interface{}, path string, value interface{}) error {
+	c, err := Compile(path)
+	if err != nil {
+		return err
+	}
+
+	obj = followPtr(obj)
+	child := obj
+	parent := obj
+
+	lastStepIdx := len(c.steps) - 1
+
+	for i, s := range c.steps {
+		switch s.op {
+		case KeyOp:
+			child, err = get_key(parent, s.key)
+			if err != nil {
+				return err
+			}
+		case IndexOp:
+			if len(s.key) > 0 {
+				parent, err = get_key(parent, s.key)
+				if err != nil {
+					return err
+				}
+			}
+			if len(s.args.([]int)) == 1 {
+				child, err = get_idx(parent, s.args.([]int)[0])
+				if err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("not supported append operation %s", s.op)
+		}
+
+		if i != lastStepIdx {
+			parent = child
+		}
+	}
+
+	last := c.steps[lastStepIdx]
+	childVal := reflect.ValueOf(child)
+	if childVal.Kind() != reflect.Slice {
+		return fmt.Errorf("not supported append operation for %v", child)
+
+	}
+	newSlice := reflect.Append(childVal, reflect.ValueOf(value))
+
+	switch reflect.ValueOf(parent).Kind() {
+	case reflect.Map:
+		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), newSlice)
+	case reflect.Slice:
+		sliceValue := reflect.ValueOf(parent)
+		idx := last.args.([]int)[0]
+		sliceValue.Index(idx).Set(newSlice)
+	}
+
+	return nil
+
 }

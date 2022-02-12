@@ -15,6 +15,7 @@ var json_data interface{}
 func init() {
 	data := `
 {
+	"main": "bicycle",
     "store": {
         "book": [
             {
@@ -96,7 +97,7 @@ func Test_jsonpath_JsonPathLookup_1(t *testing.T) {
 	if res_v, ok := res.([]interface{}); ok != true || res_v[0].(float64) != 8.95 || res_v[1].(float64) != 12.99 || res_v[2].(float64) != 8.99 || res_v[3].(float64) != 22.99 {
 		t.Errorf("exp: [8.95, 12.99, 8.99, 22.99], got: %v", res)
 	}
-	
+
 	// range
 	res, err = JsonPathLookup(json_data, "$.store.book[0:1].price")
 	t.Log(err, res)
@@ -138,6 +139,11 @@ func Test_jsonpath_JsonPathLookup_filter(t *testing.T) {
 	res, err = JsonPathLookup(json_data, "$.store.book[?(@.price > $.expensive)].price")
 	t.Log(err, res)
 	res, err = JsonPathLookup(json_data, "$.store.book[?(@.price < $.expensive)].price")
+	t.Log(err, res)
+
+	res, err = JsonPathLookup(json_data, "$.store[?($.main)]")
+	// res.map[string]interface{}
+	// "color"
 	t.Log(err, res)
 }
 
@@ -392,7 +398,7 @@ func Test_jsonpath_parse_token(t *testing.T) {
 			if args_v, ok := args.(string); ok == true {
 				fmt.Println(args_v)
 				if exp_args.(string) != args_v {
-					t.Errorf("len(args) not expected: (got)%v != (exp)%v", len(args_v), len(exp_args.([]string)))
+					t.Errorf("len(args) not expected: (got)%v != (exp)%v", len(args_v), len(exp_args.(string)))
 					return
 				}
 
@@ -874,7 +880,7 @@ func Test_jsonpath_cmp_any(t *testing.T) {
 	for idx, tcase := range tcase_cmp_any {
 		//for idx, tcase := range tcase_cmp_any[8:] {
 		t.Logf("idx: %v, %v %v %v, exp: %v", idx, tcase["obj1"], tcase["op"], tcase["obj2"], tcase["exp"])
-		res, err := cmp_any(tcase["obj1"], tcase["obj2"], tcase["op"].(string))
+		res, err := cmpAny(tcase["obj1"], tcase["obj2"], tcase["op"].(string))
 		exp := tcase["exp"].(bool)
 		exp_err := tcase["err"]
 		if exp_err != nil {
@@ -964,22 +970,26 @@ func Test_jsonpath_null_in_the_middle(t *testing.T) {
 
 func Test_jsonpath_num_cmp(t *testing.T) {
 	data := `{
-	"books": [ 
-                { "name": "My First Book", "price": 10 }, 
-		{ "name": "My Second Book", "price": 20 } 
+	"books": [
+                { "name": "My First Book", "price": 10 },
+		{ "name": "My Second Book", "price": 20 }
 		]
 }`
 	var j interface{}
 	json.Unmarshal([]byte(data), &j)
-	res, err := JsonPathLookup(j, "$.books[?(@.price > 100)].name")
-	if err != nil {
-		t.Fatal(err)
+	_, err := JsonPathLookup(j, "$.books[?(@.price > 100)].name")
+	if err == nil {
+		t.Errorf("should return err not exist")
+		return
 	}
-	arr := res.([]interface{})
-	if len(arr) != 0 {
-		t.Fatal("should return [], got: ", arr)
+	if e, ok := err.(NotExist); ok {
+		if e.key != "name" {
+			t.Fail()
+		}
+		return
+	} else {
+		t.Errorf("should return err not exist")
 	}
-
 }
 
 func BenchmarkJsonPathLookupCompiled(b *testing.B) {
@@ -1179,13 +1189,13 @@ func Test_jsonpath_rootnode_is_array_range(t *testing.T) {
 		t.Logf("idx: %v, v: %v", idx, v)
 	}
 	if len(ares) != 2 {
-		t.Fatal("len is not 2. got: %v", len(ares))
+		t.Fatalf("len is not 2. got: %v", len(ares))
 	}
 	if ares[0].(float64) != 12.34 {
-		t.Fatal("idx: 0, should be 12.34. got: %v", ares[0])
+		t.Fatalf("idx: 0, should be 12.34. got: %v", ares[0])
 	}
 	if ares[1].(float64) != 13.34 {
-		t.Fatal("idx: 0, should be 12.34. got: %v", ares[1])
+		t.Fatalf("idx: 0, should be 12.34. got: %v", ares[1])
 	}
 }
 
@@ -1232,7 +1242,7 @@ func Test_jsonpath_rootnode_is_nested_array_range(t *testing.T) {
 		t.Logf("idx: %v, v: %v", idx, v)
 	}
 	if len(ares) != 2 {
-		t.Fatal("len is not 2. got: %v", len(ares))
+		t.Fatalf("len is not 2. got: %v", len(ares))
 	}
 
 	//FIXME: `$[:1].[0].test` got wrong result
@@ -1242,4 +1252,229 @@ func Test_jsonpath_rootnode_is_nested_array_range(t *testing.T) {
 	//if ares[1].(float64) != 3.1 {
 	//	t.Fatal("idx: 0, should be 3.1, got: %v", ares[1])
 	//}
+}
+
+func Test_Set(t *testing.T) {
+	var data = map[string]interface{}{
+		"user": map[string]interface{}{
+			"firstname": "seth",
+			"lastname":  "rogen",
+		},
+		"age": 35,
+		"filmography": map[string]interface{}{
+			"movies": []string{
+				"This Is The End",
+				"Superbad",
+				"Neighbors",
+			},
+		},
+	}
+
+	err := Set(&data, "$.filmography.movies[2]", "The Disaster Artist")
+	if err != nil {
+		t.Errorf("failed to set filmography.movies[2]: %v", err)
+	}
+
+	secondMovie := reflect.ValueOf(data["filmography"]).MapIndex(reflect.ValueOf("movies")).Elem().Index(2).Interface()
+	if secondMovie != "The Disaster Artist" {
+		t.Errorf("set filmography.movies[2] to wrong value, wanted: %v, got %v", "The Disaster Artist", secondMovie)
+	}
+
+	newUser := map[string]interface{}{
+		"firstname": "james",
+		"lastname":  "franco",
+	}
+
+	err = Set(&data, "$.user", &newUser)
+	if err != nil {
+		t.Errorf("failed to set user: %v", err)
+	}
+	newData := map[string]interface{}{
+		"hello": 12,
+	}
+
+	err = Set(&data, "$.newData", newData)
+	if err != nil {
+		t.Errorf("failed to set: %v", err)
+	} else {
+		exist := reflect.ValueOf(data["newData"]).Interface()
+		if !reflect.DeepEqual(exist, newData) {
+			t.Errorf("setting a nonexistant field did not work well, wanted: %#v, got %#v", newData, exist)
+		}
+	}
+
+	err = Set(&data, "$.not.correct", newData)
+	if err == nil {
+		t.Errorf("incorrect set")
+	}
+
+}
+
+func Test_Del(t *testing.T) {
+	var data = map[string]interface{}{
+		"user": map[string]interface{}{
+			"firstname": "seth",
+			"lastname":  "rogen",
+		},
+		"age": 35,
+		"filmography": map[string]interface{}{
+			"movies": []string{
+				"This Is The End",
+				"Superbad",
+				"Neighbors",
+			},
+		},
+	}
+	del := func(path, field string) {
+		err := Del(&data, path)
+		_, found := data[field]
+		if err != nil || found {
+			t.Errorf("field %s not deleted", field)
+		}
+	}
+	del("$.user", "user")
+	del("$.age", "age")
+
+	err := Del(&data, "$.filmography.movies")
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func Test_Append(t *testing.T) {
+	var data = map[string]interface{}{
+		"values": []int{
+			1,
+			2,
+			3,
+		},
+		"strValues": [][]string{
+			{"first", "second"},
+			{"second"},
+		},
+	}
+
+	err := Append(&data, "$.values", 4)
+	if err != nil {
+		t.Error(err)
+	}
+	values := data["values"].([]int)
+	if values[len(values)-1] != 4 {
+		t.Fail()
+	}
+
+	err = Append(&data, "$.strValues.str", "third")
+	if err == nil {
+		t.Error("founded not exists key")
+	}
+
+	err = Append(&data, "$.strValues[1]", "third")
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func Test_GetWildcard(t *testing.T) {
+
+	data := map[string]interface{}{
+		"values": []int{
+			1,
+			2,
+			3,
+		},
+		"strValues": [][]string{
+			{"first", "second"},
+			{"second"},
+		},
+	}
+	p := MustCompile("$")
+	if p.String() == "" {
+		t.Fail()
+	}
+	d, err := p.Lookup(&data)
+	if err != nil {
+		t.Error(err)
+	}
+	if !reflect.DeepEqual(*d.(*map[string]interface{}), data) {
+		t.Fail()
+	}
+
+	if _, err = Compile("$.values*"); err != nil {
+		t.Error(err)
+	}
+
+}
+
+func Test_GetNameWithDots(t *testing.T) {
+
+	data := map[string]interface{}{
+		"values.wi:th/Dot": []int{
+			1,
+			2,
+			3,
+		},
+		"second": map[string]int{
+			"sec.1": 1,
+			"sec.3": 3,
+		},
+		"strValues": [][]string{
+			{"first", "second"},
+			{"second"},
+		},
+	}
+	p, err := Compile("$.['values.wi:th/Dot'][1]")
+	if err != nil {
+		t.Error(err)
+	}
+	v, err := p.Lookup(&data)
+	if err != nil {
+		t.Error(err)
+	}
+	if v.(int) != 2 {
+		t.Fail()
+	}
+
+	p, err = Compile("$.second['sec.1']")
+	if err != nil {
+		t.Error(err)
+	}
+
+	v, err = p.Lookup(&data)
+	if err != nil {
+		t.Error(err)
+	}
+	if v.(int) != 1 {
+		t.Fail()
+	}
+
+}
+
+func Test_LookupBadQuery(t *testing.T) {
+
+	res, err := JsonPathLookup(json_data, "$.store[?]")
+	if err == nil {
+		t.Fail()
+	}
+	t.Log(res)
+	res, err = JsonPathLookup(json_data, "$.store[']")
+	if err == nil {
+		t.Fail()
+	}
+	t.Log(res, err)
+}
+
+func Test_LookupExpresion(t *testing.T) {
+
+	res, err := JsonPathLookup(json_data, "$.store[($.main)]")
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	t.Log(res)
+	m, ok := res.(map[string]interface{})
+	if !ok {
+		t.Fail()
+	}
+	if _, ok := m["color"]; !ok {
+		t.Fail()
+	}
 }
