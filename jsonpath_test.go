@@ -1373,6 +1373,22 @@ func Test_Append(t *testing.T) {
 		t.Error(err)
 	}
 }
+func Test_AppendToMap(t *testing.T) {
+	data := map[string]interface{}{
+		"value": map[string]interface{}{
+			"v1": 1,
+			"v2": 2,
+		},
+		"strValue": "strVal",
+	}
+	err := Append(&data, "$.value['v3']", 3)
+	if err != nil {
+		t.Error(err)
+	}
+	if data["value"].(map[string]interface{})["v3"] != 3 {
+		t.Errorf("incorrect append to map")
+	}
+}
 
 func Test_GetWildcard(t *testing.T) {
 

@@ -319,7 +319,7 @@ func parse_token(token string) (op string, key string, args interface{}, err err
 		tail = tail[1 : len(tail)-1]
 
 		// for ['some.key']
-		if tail[0] == 39 && len(tail) > 2{
+		if tail[0] == 39 && len(tail) > 2 {
 			return "key", key, tail[1 : len(tail)-1], nil
 		}
 		if strings.Contains(tail, "?") {
@@ -993,19 +993,29 @@ func Append(obj interface{}, path string, value interface{}) error {
 
 	last := c.steps[lastStepIdx]
 	childVal := reflect.ValueOf(child)
-	if childVal.Kind() != reflect.Slice {
-		return fmt.Errorf("not support append operation for %v", child)
-
-	}
-	newSlice := reflect.Append(childVal, reflect.ValueOf(value))
-
-	switch reflect.ValueOf(parent).Kind() {
+	parentVal := reflect.ValueOf(parent)
+	var newValue reflect.Value
+	switch childVal.Kind() {
 	case reflect.Map:
-		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), newSlice)
+		newKey, ok := last.args.(string)
+		if !ok {
+			return fmt.Errorf("incorrect append operation, key must be a string, got: %v", last.args)
+		}
+		childVal.SetMapIndex(reflect.ValueOf(newKey), reflect.ValueOf(value))
+		newValue = childVal
+
 	case reflect.Slice:
-		sliceValue := reflect.ValueOf(parent)
+		newValue = reflect.Append(childVal, reflect.ValueOf(value))
+	default:
+		return fmt.Errorf("not support append operation for %v", child)
+	}
+
+	switch parentVal.Kind() {
+	case reflect.Map:
+		parentVal.SetMapIndex(reflect.ValueOf(last.key), newValue)
+	case reflect.Slice:
 		idx := last.args.([]int)[0]
-		sliceValue.Index(idx).Set(newSlice)
+		parentVal.Index(idx).Set(newValue)
 	}
 
 	return nil
