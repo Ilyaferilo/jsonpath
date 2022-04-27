@@ -86,7 +86,9 @@ func (c *Compiled) String() string {
 
 // lookupKey find key and return object by key.
 // If step contain subkey then child object of founded object will be returned by subkey
-func lookupKey(obj interface{}, s step) (interface{}, error) {
+func lookupKey(obj interface{}, s step) ([2]interface{}, error) {
+	parent := obj
+
 	subKey, ok := s.args.(string)
 	if !ok {
 		subKey = ""
@@ -97,12 +99,13 @@ func lookupKey(obj interface{}, s step) (interface{}, error) {
 	}
 	obj, err := get_key(obj, s.key)
 	if err != nil {
-		return nil, err
+		return [2]interface{}{parent, nil}, err
 	}
 	if subKey != "" {
+		parent = obj
 		obj, err = get_key(obj, subKey)
 	}
-	return obj, err
+	return [2]interface{}{parent, obj}, err
 }
 
 func lookupExpression(obj, rootObj interface{}, s step) (interface{}, error) {
@@ -131,7 +134,8 @@ func (c *Compiled) Lookup(rootObj interface{}) (interface{}, error) {
 		// "key", "idx"
 		switch s.op {
 		case KeyOp:
-			obj, err = lookupKey(obj, s)
+			parentWithExtracted, err := lookupKey(obj, s)
+			obj = parentWithExtracted[1]
 			if err != nil {
 				return nil, err
 			}
@@ -845,7 +849,9 @@ func Set(obj interface{}, path string, value interface{}) error {
 	for i, s := range c.steps {
 		switch s.op {
 		case KeyOp:
-			child, err = get_key(parent, s.key)
+			extracted, err := lookupKey(obj, s)
+			child = extracted[1]
+
 			if err != nil {
 				if _, ok := err.(NotExist); !ok && err != ErrGetFromNullObj {
 					return err
@@ -910,7 +916,9 @@ func Del(obj interface{}, path string) error {
 	for i, s := range c.steps {
 		switch s.op {
 		case KeyOp:
-			child, err = get_key(parent, s.key)
+			extracted, err := lookupKey(parent, s)
+			child = extracted[1]
+			parent = extracted[0]
 			if err != nil {
 				return err
 			}
@@ -939,13 +947,18 @@ func Del(obj interface{}, path string) error {
 	}
 
 	last := c.steps[lastStepIdx]
-	switch reflect.ValueOf(parent).Kind() {
+	parentVal := reflect.ValueOf(parent)
+	switch parentVal.Kind() {
 	case reflect.Map:
-		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), reflect.Value{})
+		if subKey, ok := last.args.(string); ok {
+			// parent, _ = get_key(parent, subKey)
+			parentVal.SetMapIndex(reflect.ValueOf(subKey), reflect.Value{})
+			return nil
+		}
+		parentVal.SetMapIndex(reflect.ValueOf(last.key), reflect.Value{})
 	case reflect.Slice:
-		sliceValue := reflect.ValueOf(parent)
 		idx := last.args.([]int)[0]
-		sliceValue.Index(idx).Set(reflect.Value{})
+		parentVal.Index(idx).Set(reflect.Value{})
 	}
 	return nil
 }
@@ -965,10 +978,15 @@ func Append(obj interface{}, path string, value interface{}) error {
 	for i, s := range c.steps {
 		switch s.op {
 		case KeyOp:
-			child, err = get_key(parent, s.key)
-			if err != nil {
-				return err
+			parentWithExtracted, _ := lookupKey(parent, s)
+
+			if parentWithExtracted[1] != nil {
+				child = parentWithExtracted[1]
+				parent = parentWithExtracted[0]
+			} else {
+				child = parentWithExtracted[0]
 			}
+
 		case IndexOp:
 			if len(s.key) > 0 {
 				parent, err = get_key(parent, s.key)
@@ -992,8 +1010,13 @@ func Append(obj interface{}, path string, value interface{}) error {
 	}
 
 	last := c.steps[lastStepIdx]
+	updatedKey := last.key
+
 	childVal := reflect.ValueOf(child)
 	parentVal := reflect.ValueOf(parent)
+	if reflect.DeepEqual(childVal, parentVal) {
+		return fmt.Errorf("incorrect object lookup")
+	}
 	var newValue reflect.Value
 	switch childVal.Kind() {
 	case reflect.Map:
@@ -1003,6 +1026,7 @@ func Append(obj interface{}, path string, value interface{}) error {
 		}
 		childVal.SetMapIndex(reflect.ValueOf(newKey), reflect.ValueOf(value))
 		newValue = childVal
+		last.args = nil
 
 	case reflect.Slice:
 		newValue = reflect.Append(childVal, reflect.ValueOf(value))
@@ -1012,7 +1036,12 @@ func Append(obj interface{}, path string, value interface{}) error {
 
 	switch parentVal.Kind() {
 	case reflect.Map:
-		parentVal.SetMapIndex(reflect.ValueOf(last.key), newValue)
+
+		newKey, ok := last.args.(string)
+		if ok {
+			updatedKey = newKey
+		}
+		parentVal.SetMapIndex(reflect.ValueOf(updatedKey), newValue)
 	case reflect.Slice:
 		idx := last.args.([]int)[0]
 		parentVal.Index(idx).Set(newValue)

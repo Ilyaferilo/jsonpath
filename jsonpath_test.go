@@ -1311,6 +1311,7 @@ func Test_Set(t *testing.T) {
 }
 
 func Test_Del(t *testing.T) {
+	uid :="231841AA-3CEF-4F6C-9824-71B6A6C71D22"
 	var data = map[string]interface{}{
 		"user": map[string]interface{}{
 			"firstname": "seth",
@@ -1318,6 +1319,7 @@ func Test_Del(t *testing.T) {
 		},
 		"age": 35,
 		"filmography": map[string]interface{}{
+			uid: 1,
 			"movies": []string{
 				"This Is The End",
 				"Superbad",
@@ -1334,6 +1336,14 @@ func Test_Del(t *testing.T) {
 	}
 	del("$.user", "user")
 	del("$.age", "age")
+
+	if err := Del(&data, fmt.Sprintf("$.filmography['%s']", uid)); err != nil {
+		t.Error(err)
+	}
+	fm := data["filmography"].(map[string]interface{})
+	if _, found := fm[uid]; found{
+		t.Errorf("uid was not been deleted")
+	}
 
 	err := Del(&data, "$.filmography.movies")
 	if err != nil {
@@ -1363,7 +1373,7 @@ func Test_Append(t *testing.T) {
 		t.Fail()
 	}
 
-	err = Append(&data, "$.strValues.str", "third")
+	err = Append(&data, "$.strValues.notExists", "third")
 	if err == nil {
 		t.Error("founded not exists key")
 	}
@@ -1373,6 +1383,7 @@ func Test_Append(t *testing.T) {
 		t.Error(err)
 	}
 }
+
 func Test_AppendToMap(t *testing.T) {
 	data := map[string]interface{}{
 		"value": map[string]interface{}{
@@ -1381,12 +1392,19 @@ func Test_AppendToMap(t *testing.T) {
 		},
 		"strValue": "strVal",
 	}
-	err := Append(&data, "$.value['v3']", 3)
+	err := Append(&data, "$.value['v3']", []int{3})
 	if err != nil {
 		t.Error(err)
 	}
-	if data["value"].(map[string]interface{})["v3"] != 3 {
+	if data["value"].(map[string]interface{})["v3"].([]int)[0] != 3 {
 		t.Errorf("incorrect append to map")
+	}
+	err = Append(&data, "$.value['v3']", 2)
+	if err != nil {
+		t.Error(err)
+	}
+	if data["value"].(map[string]interface{})["v3"].([]int)[1] != 2 {
+		t.Errorf("incorrect append into slice in map")
 	}
 }
 
