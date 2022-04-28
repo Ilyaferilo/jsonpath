@@ -845,12 +845,15 @@ func Set(obj interface{}, path string, value interface{}) error {
 	parent := obj
 
 	lastStepIdx := len(c.steps) - 1
+	var lastError error
 
 	for i, s := range c.steps {
 		switch s.op {
 		case KeyOp:
 			extracted, err := lookupKey(obj, s)
+			parent = extracted[0]
 			child = extracted[1]
+			lastError = err
 
 			if err != nil {
 				if _, ok := err.(NotExist); !ok && err != ErrGetFromNullObj {
@@ -887,14 +890,30 @@ func Set(obj interface{}, path string, value interface{}) error {
 	}
 
 	last := c.steps[lastStepIdx]
-	switch reflect.ValueOf(parent).Kind() {
+	parentVal := reflect.ValueOf(parent)
+	switch parentVal.Kind() {
 	case reflect.Map:
-		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), reflect.ValueOf(value))
+
+		if subKey, ok := last.args.(string); ok {
+			var newValue interface{}
+			newKey := last.key
+			newValue = map[string]interface{}{
+			   subKey: value,
+		   }
+			if notExistsKey, ok := lastError.(NotExist); ok {
+				if notExistsKey.key != newKey {					
+					newKey = notExistsKey.key
+					newValue = value
+				}
+			}
+			parentVal.SetMapIndex(reflect.ValueOf(newKey), reflect.ValueOf(newValue))
+		} else {
+			parentVal.SetMapIndex(reflect.ValueOf(last.key), reflect.ValueOf(value))
+		}
 		return nil
 	case reflect.Slice:
-		sliceValue := reflect.ValueOf(parent)
 		idx := last.args.([]int)[0]
-		sliceValue.Index(idx).Set(reflect.ValueOf(value))
+		parentVal.Index(idx).Set(reflect.ValueOf(value))
 		return nil
 	default:
 		return fmt.Errorf("could not set value at path, %s", path)

@@ -1310,8 +1310,29 @@ func Test_Set(t *testing.T) {
 
 }
 
+func Test_SetWithQuotes(t *testing.T) {
+	var data = map[string]interface{}{
+		"t": 1,
+	}
+	err := Set(&data, "$.radio['a']", 3)
+	if err != nil {
+		t.Errorf("failed to set a: %v", err)
+	}
+	err = Set(&data, "$.radio['b']", 1)
+	if err != nil {
+		t.Errorf("failed to set b: %v", err)
+	}
+	r := data["radio"].(map[string]interface{})
+	if a, found := r["a"]; !found || a.(int) != 3{
+		t.Error("not found: a")
+	}
+	if b, found := r["b"]; !found || b.(int) != 1{
+		t.Error("not found: b")
+	}
+}
+
 func Test_Del(t *testing.T) {
-	uid :="231841AA-3CEF-4F6C-9824-71B6A6C71D22"
+	uid := "231841AA-3CEF-4F6C-9824-71B6A6C71D22"
 	var data = map[string]interface{}{
 		"user": map[string]interface{}{
 			"firstname": "seth",
@@ -1341,7 +1362,7 @@ func Test_Del(t *testing.T) {
 		t.Error(err)
 	}
 	fm := data["filmography"].(map[string]interface{})
-	if _, found := fm[uid]; found{
+	if _, found := fm[uid]; found {
 		t.Errorf("uid was not been deleted")
 	}
 
