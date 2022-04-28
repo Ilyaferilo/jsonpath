@@ -1323,10 +1323,10 @@ func Test_SetWithQuotes(t *testing.T) {
 		t.Errorf("failed to set b: %v", err)
 	}
 	r := data["radio"].(map[string]interface{})
-	if a, found := r["a"]; !found || a.(int) != 3{
+	if a, found := r["a"]; !found || a.(int) != 3 {
 		t.Error("not found: a")
 	}
-	if b, found := r["b"]; !found || b.(int) != 1{
+	if b, found := r["b"]; !found || b.(int) != 1 {
 		t.Error("not found: b")
 	}
 }
@@ -1369,6 +1369,20 @@ func Test_Del(t *testing.T) {
 	err := Del(&data, "$.filmography.movies")
 	if err != nil {
 		t.Error(err)
+	}
+}
+
+func Test_DeleteFromSlice(t *testing.T) {
+	data := []int{1, 2, 3}
+	root := map[string]interface{}{
+		"slice": data,
+		"other": 2,
+	}
+	if err := Del(&root, "$.slice[0]"); err != nil {
+		t.Error(err)
+	}
+	if len(root["slice"].([]int)) == 3 {
+		t.Error("slice element was not deleted")
 	}
 }
 

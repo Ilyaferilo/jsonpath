@@ -898,10 +898,10 @@ func Set(obj interface{}, path string, value interface{}) error {
 			var newValue interface{}
 			newKey := last.key
 			newValue = map[string]interface{}{
-			   subKey: value,
-		   }
+				subKey: value,
+			}
 			if notExistsKey, ok := lastError.(NotExist); ok {
-				if notExistsKey.key != newKey {					
+				if notExistsKey.key != newKey {
 					newKey = notExistsKey.key
 					newValue = value
 				}
@@ -920,13 +920,19 @@ func Set(obj interface{}, path string, value interface{}) error {
 	}
 }
 
-func Del(obj interface{}, path string) error {
+func deleteElement(objSrc interface{}, i int) reflect.Value {
+	slice := reflect.ValueOf(objSrc)
+	currentLen := slice.Len()
+	newSlice := reflect.AppendSlice(slice.Slice(0, i), slice.Slice(i+1, currentLen))
+	return newSlice
+}
+
+func Del(objSrc interface{}, path string) error {
 	c, err := Compile(path)
 	if err != nil {
 		return err
 	}
-
-	obj = followPtr(obj)
+	obj := followPtr(objSrc)
 	child := obj
 	parent := obj
 
@@ -969,15 +975,16 @@ func Del(obj interface{}, path string) error {
 	parentVal := reflect.ValueOf(parent)
 	switch parentVal.Kind() {
 	case reflect.Map:
+		deletedKey := last.key
 		if subKey, ok := last.args.(string); ok {
-			// parent, _ = get_key(parent, subKey)
-			parentVal.SetMapIndex(reflect.ValueOf(subKey), reflect.Value{})
-			return nil
+			deletedKey = subKey
 		}
-		parentVal.SetMapIndex(reflect.ValueOf(last.key), reflect.Value{})
+		parentVal.SetMapIndex(reflect.ValueOf(deletedKey), reflect.Value{})
 	case reflect.Slice:
 		idx := last.args.([]int)[0]
-		parentVal.Index(idx).Set(reflect.Value{})
+		index := strings.LastIndex(path, "[")
+		newSlice := deleteElement(parent, idx)
+		return Set(objSrc, path[:index], newSlice.Interface())
 	}
 	return nil
 }
