@@ -1329,6 +1329,40 @@ func Test_SetWithQuotes(t *testing.T) {
 	if b, found := r["b"]; !found || b.(int) != 1 {
 		t.Error("not found: b")
 	}
+
+	complexJson := []byte(`{"radioChannels": {
+		"xxc": {
+		  "count": 122,
+		  "discriminator": {
+			"oneOf": [
+			  1,
+			  3,
+			  444444,
+			  444444
+			]
+		  },
+		  "main": [
+			"Arm2"
+		  ]
+		}
+	  }}
+	  `)
+	var object interface{}
+	if err := json.Unmarshal(complexJson, &object); err != nil {
+		t.Error(err)
+	}
+	complexPath := "$.radioChannels['xxc'].discriminator.oneOf"
+	newOneOf := []int{1, 2, 3}
+	if err := Set(&object, complexPath, newOneOf); err != nil {
+		t.Error(err)
+	}
+	if extracted, err := JsonPathLookup(&object, complexPath); err != nil {
+		t.Error(err)
+	} else {
+		if !reflect.DeepEqual(extracted.([]int), newOneOf){
+			t.Error("incorrect set new one of", extracted)
+		}
+	}
 }
 
 func Test_Del(t *testing.T) {

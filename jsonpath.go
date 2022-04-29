@@ -850,7 +850,7 @@ func Set(obj interface{}, path string, value interface{}) error {
 	for i, s := range c.steps {
 		switch s.op {
 		case KeyOp:
-			extracted, err := lookupKey(obj, s)
+			extracted, err := lookupKey(parent, s)
 			parent = extracted[0]
 			child = extracted[1]
 			lastError = err
