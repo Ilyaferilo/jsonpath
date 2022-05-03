@@ -110,8 +110,7 @@ func lookupKey(obj interface{}, s step) ([2]interface{}, error) {
 }
 
 func lookupExpression(obj, rootObj interface{}, s step) (interface{}, error) {
-	ex, err := lookupKey(obj, s)
-	obj = ex[1]
+	obj, err := get_key(obj, s.key)
 	if err != nil {
 		return nil, err
 	}
