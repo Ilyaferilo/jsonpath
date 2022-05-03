@@ -86,6 +86,7 @@ func (c *Compiled) String() string {
 
 // lookupKey find key and return object by key.
 // If step contain subkey then child object of founded object will be returned by subkey
+// returns extracted parent and child
 func lookupKey(obj interface{}, s step) ([2]interface{}, error) {
 	parent := obj
 
@@ -109,7 +110,8 @@ func lookupKey(obj interface{}, s step) ([2]interface{}, error) {
 }
 
 func lookupExpression(obj, rootObj interface{}, s step) (interface{}, error) {
-	obj, err := get_key(obj, s.key)
+	ex, err := lookupKey(obj, s)
+	obj = ex[1]
 	if err != nil {
 		return nil, err
 	}
@@ -480,19 +482,20 @@ func get_idx(obj interface{}, idx int) (interface{}, error) {
 	if reflect.TypeOf(obj).Kind() != reflect.Slice {
 		return nil, fmt.Errorf("object is not Slice")
 	}
-	length := reflect.ValueOf(obj).Len()
+	objVal := reflect.ValueOf(obj)
+	length := objVal.Len()
 	if idx >= 0 {
 		if idx >= length {
 			return nil, fmt.Errorf("index out of range: len: %v, idx: %v", length, idx)
 		}
-		return reflect.ValueOf(obj).Index(idx).Interface(), nil
+		return objVal.Index(idx).Interface(), nil
 	} else {
 		// < 0
 		_idx := length + idx
 		if _idx < 0 {
 			return nil, fmt.Errorf("index out of range: len: %v, idx: %v", length, idx)
 		}
-		return reflect.ValueOf(obj).Index(_idx).Interface(), nil
+		return objVal.Index(_idx).Interface(), nil
 	}
 }
 
@@ -832,13 +835,24 @@ func followPtr(data interface{}) interface{} {
 	return rv.Interface()
 }
 
-func Set(obj interface{}, path string, value interface{}) error {
+func stepToPath(s step) string {
+	switch s.op {
+	case KeyOp:
+		if subKey, ok := s.args.(string); ok {
+			return fmt.Sprintf("$.%s['%s']", s.key, subKey)
+		}
+		return fmt.Sprintf("$.%s", s.key)
+	}
+	return "$"
+}
+
+func Set(rootObj interface{}, path string, value interface{}) error {
 	c, err := Compile(path)
 	if err != nil {
 		return err
 	}
 
-	obj = followPtr(obj)
+	obj := followPtr(rootObj)
 	value = followPtr(value)
 
 	child := obj
@@ -879,6 +893,21 @@ func Set(obj interface{}, path string, value interface{}) error {
 					return err
 				}
 			}
+		case FilterOp:
+			child, err = get_key(parent, s.key)
+
+			if err != nil {
+				return err
+			}
+			child, err = get_filtered(child, rootObj, s.args.(string))
+			if err != nil {
+				return err
+			}
+		case ExpressionOp:
+			child, err = lookupExpression(parent, rootObj, s)
+			if err != nil {
+				return err
+			}
 
 		default:
 			return fmt.Errorf("%s expression don't support in set", s.op)
@@ -912,8 +941,19 @@ func Set(obj interface{}, path string, value interface{}) error {
 		}
 		return nil
 	case reflect.Slice:
-		idx := last.args.([]int)[0]
-		parentVal.Index(idx).Set(reflect.ValueOf(value))
+
+		switch last.op {
+		case IndexOp:
+			idx := last.args.([]int)[0]
+			parentVal.Index(idx).Set(reflect.ValueOf(value))
+		case KeyOp:
+			lastStepPath := stepToPath(last)
+			for i := 0; i < parentVal.Len(); i++ {
+				if err := Set(parentVal.Index(i).Interface(), lastStepPath, value); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	default:
 		return fmt.Errorf("could not set value at path, %s", path)

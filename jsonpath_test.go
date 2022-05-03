@@ -1359,9 +1359,20 @@ func Test_SetWithQuotes(t *testing.T) {
 	if extracted, err := JsonPathLookup(&object, complexPath); err != nil {
 		t.Error(err)
 	} else {
-		if !reflect.DeepEqual(extracted.([]int), newOneOf){
+		if !reflect.DeepEqual(extracted.([]int), newOneOf) {
 			t.Error("incorrect set new one of", extracted)
 		}
+	}
+}
+func Test_SetFiltered(t *testing.T) {
+	filteredBefore, _ := JsonPathLookup(&json_data, "$.store.book[?(@.price > 10)].price")
+	err := Set(&json_data, "$.store.book[?(@.price > 10)].price", 42)
+	if err != nil {
+		t.Errorf("failed to set filtered: %v", err)
+	}
+	filteredAfter, _ := JsonPathLookup(&json_data, "$.store.book[?(@.price == 42)].price")
+	if reflect.ValueOf(filteredBefore).Len() != reflect.ValueOf(filteredAfter).Len() {
+		t.Error("incorrect filtering")
 	}
 }
 
