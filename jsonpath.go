@@ -88,7 +88,10 @@ func (c *Compiled) String() string {
 
 // lookupKey find key and return object by key.
 // If step contain subkey then child object of founded object will be returned by subkey
-func lookupKey(obj interface{}, s step) (interface{}, error) {
+// returns extracted parent and child
+func lookupKey(obj interface{}, s step) ([2]interface{}, error) {
+	parent := obj
+
 	subKey, ok := s.args.(string)
 	if !ok {
 		subKey = ""
@@ -99,12 +102,13 @@ func lookupKey(obj interface{}, s step) (interface{}, error) {
 	}
 	obj, err := get_key(obj, s.key)
 	if err != nil {
-		return nil, err
+		return [2]interface{}{parent, nil}, err
 	}
 	if subKey != "" {
+		parent = obj
 		obj, err = get_key(obj, subKey)
 	}
-	return obj, err
+	return [2]interface{}{parent, obj}, err
 }
 
 func lookupExpression(obj, rootObj interface{}, s step) (interface{}, error) {
@@ -133,7 +137,8 @@ func (c *Compiled) Lookup(rootObj interface{}) (interface{}, error) {
 		// "key", "idx"
 		switch s.op {
 		case KeyOp:
-			obj, err = lookupKey(obj, s)
+			parentWithExtracted, err := lookupKey(obj, s)
+			obj = parentWithExtracted[1]
 			if err != nil {
 				return nil, err
 			}
@@ -478,19 +483,20 @@ func get_idx(obj interface{}, idx int) (interface{}, error) {
 	if reflect.TypeOf(obj).Kind() != reflect.Slice {
 		return nil, fmt.Errorf("object is not Slice")
 	}
-	length := reflect.ValueOf(obj).Len()
+	objVal := reflect.ValueOf(obj)
+	length := objVal.Len()
 	if idx >= 0 {
 		if idx >= length {
 			return nil, fmt.Errorf("index out of range: len: %v, idx: %v", length, idx)
 		}
-		return reflect.ValueOf(obj).Index(idx).Interface(), nil
+		return objVal.Index(idx).Interface(), nil
 	} else {
 		// < 0
 		_idx := length + idx
 		if _idx < 0 {
 			return nil, fmt.Errorf("index out of range: len: %v, idx: %v", length, idx)
 		}
-		return reflect.ValueOf(obj).Index(_idx).Interface(), nil
+		return objVal.Index(_idx).Interface(), nil
 	}
 }
 
@@ -688,6 +694,45 @@ func parse_filter(filter string) (lp string, op string, rp string, err error) {
 	return lp, op, rp, err
 }
 
+func parse_filter_v1(filter string) (lp string, op string, rp string, err error) {
+	tmp := ""
+	istoken := false
+	for _, c := range filter {
+		if !istoken && c != ' ' {
+			istoken = true
+		}
+		if istoken && c == ' ' {
+			istoken = false
+		}
+		if istoken {
+			tmp += string(c)
+		}
+		if !istoken && tmp != "" {
+			if lp == "" {
+				lp = tmp[:]
+				tmp = ""
+			} else if op == "" {
+				op = tmp[:]
+				tmp = ""
+			} else if rp == "" {
+				rp = tmp[:]
+				tmp = ""
+			}
+		}
+	}
+	if tmp != "" && lp == "" && op == "" && rp == "" {
+		lp = tmp[:]
+		op = "exists"
+		rp = ""
+		err = nil
+		return
+	} else if tmp != "" && rp == "" {
+		rp = tmp[:]
+		tmp = ""
+	}
+	return lp, op, rp, err
+}
+
 func eval_reg_filter(obj, root interface{}, lp string, pat *regexp.Regexp) (res bool, err error) {
 	if pat == nil {
 		return false, errors.New("nil pat")
@@ -788,25 +833,40 @@ func followPtr(data interface{}) interface{} {
 	return rv.Interface()
 }
 
-// Set value for obj by path
-func Set(obj interface{}, path string, value interface{}) error {
+func stepToPath(s step) string {
+	switch s.op {
+	case KeyOp:
+		if subKey, ok := s.args.(string); ok {
+			return fmt.Sprintf("$.%s['%s']", s.key, subKey)
+		}
+		return fmt.Sprintf("$.%s", s.key)
+	}
+	return "$"
+}
+
+func Set(rootObj interface{}, path string, value interface{}) error {
 	c, err := Compile(path)
 	if err != nil {
 		return err
 	}
 
-	obj = followPtr(obj)
+	obj := followPtr(rootObj)
 	value = followPtr(value)
 
 	child := obj
 	parent := obj
 
 	lastStepIdx := len(c.steps) - 1
+	var lastError error
 
 	for i, s := range c.steps {
 		switch s.op {
 		case KeyOp:
-			child, err = get_key(parent, s.key)
+			extracted, err := lookupKey(parent, s)
+			parent = extracted[0]
+			child = extracted[1]
+			lastError = err
+
 			if err != nil {
 				if _, ok := err.(NotExist); !ok && err != ErrGetFromNullObj {
 					return err
@@ -831,6 +891,21 @@ func Set(obj interface{}, path string, value interface{}) error {
 					return err
 				}
 			}
+		case FilterOp:
+			child, err = get_key(parent, s.key)
+
+			if err != nil {
+				return err
+			}
+			child, err = get_filtered(child, rootObj, s.args.(string))
+			if err != nil {
+				return err
+			}
+		case ExpressionOp:
+			child, err = lookupExpression(parent, rootObj, s)
+			if err != nil {
+				return err
+			}
 
 		default:
 			return fmt.Errorf("%s expression don't support in set", s.op)
@@ -842,28 +917,60 @@ func Set(obj interface{}, path string, value interface{}) error {
 	}
 
 	last := c.steps[lastStepIdx]
-	switch reflect.ValueOf(parent).Kind() {
+	parentVal := reflect.ValueOf(parent)
+	switch parentVal.Kind() {
 	case reflect.Map:
-		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), reflect.ValueOf(value))
+
+		if subKey, ok := last.args.(string); ok {
+			var newValue interface{}
+			newKey := last.key
+			newValue = map[string]interface{}{
+				subKey: value,
+			}
+			if notExistsKey, ok := lastError.(NotExist); ok {
+				if notExistsKey.key != newKey {
+					newKey = notExistsKey.key
+					newValue = value
+				}
+			}
+			parentVal.SetMapIndex(reflect.ValueOf(newKey), reflect.ValueOf(newValue))
+		} else {
+			parentVal.SetMapIndex(reflect.ValueOf(last.key), reflect.ValueOf(value))
+		}
 		return nil
 	case reflect.Slice:
-		sliceValue := reflect.ValueOf(parent)
-		idx := last.args.([]int)[0]
-		sliceValue.Index(idx).Set(reflect.ValueOf(value))
+
+		switch last.op {
+		case IndexOp:
+			idx := last.args.([]int)[0]
+			parentVal.Index(idx).Set(reflect.ValueOf(value))
+		case KeyOp:
+			lastStepPath := stepToPath(last)
+			for i := 0; i < parentVal.Len(); i++ {
+				if err := Set(parentVal.Index(i).Interface(), lastStepPath, value); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	default:
 		return fmt.Errorf("could not set value at path, %s", path)
 	}
 }
 
-// Del from object by path
-func Del(obj interface{}, path string) error {
+func deleteElement(objSrc interface{}, i int) reflect.Value {
+	slice := reflect.ValueOf(objSrc)
+	currentLen := slice.Len()
+	newSlice := reflect.AppendSlice(slice.Slice(0, i), slice.Slice(i+1, currentLen))
+	return newSlice
+}
+
+func Del(objSrc interface{}, path string) error {
 	c, err := Compile(path)
 	if err != nil {
 		return err
 	}
-
-	obj = followPtr(obj)
+	obj := followPtr(objSrc)
 	child := obj
 	parent := obj
 
@@ -872,7 +979,9 @@ func Del(obj interface{}, path string) error {
 	for i, s := range c.steps {
 		switch s.op {
 		case KeyOp:
-			child, err = get_key(parent, s.key)
+			extracted, err := lookupKey(parent, s)
+			child = extracted[1]
+			parent = extracted[0]
 			if err != nil {
 				return err
 			}
@@ -892,7 +1001,7 @@ func Del(obj interface{}, path string) error {
 				}
 			}
 		default:
-			return fmt.Errorf("not supported del operation %s", s.op)
+			return fmt.Errorf("not support del operation %s", s.op)
 		}
 
 		if i != lastStepIdx {
@@ -901,18 +1010,23 @@ func Del(obj interface{}, path string) error {
 	}
 
 	last := c.steps[lastStepIdx]
-	switch reflect.ValueOf(parent).Kind() {
+	parentVal := reflect.ValueOf(parent)
+	switch parentVal.Kind() {
 	case reflect.Map:
-		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), reflect.Value{})
+		deletedKey := last.key
+		if subKey, ok := last.args.(string); ok {
+			deletedKey = subKey
+		}
+		parentVal.SetMapIndex(reflect.ValueOf(deletedKey), reflect.Value{})
 	case reflect.Slice:
-		sliceValue := reflect.ValueOf(parent)
 		idx := last.args.([]int)[0]
-		sliceValue.Index(idx).Set(reflect.Value{})
+		index := strings.LastIndex(path, "[")
+		newSlice := deleteElement(parent, idx)
+		return Set(objSrc, path[:index], newSlice.Interface())
 	}
 	return nil
 }
 
-// Append value to object by path
 func Append(obj interface{}, path string, value interface{}) error {
 	c, err := Compile(path)
 	if err != nil {
@@ -928,10 +1042,15 @@ func Append(obj interface{}, path string, value interface{}) error {
 	for i, s := range c.steps {
 		switch s.op {
 		case KeyOp:
-			child, err = get_key(parent, s.key)
-			if err != nil {
-				return err
+			parentWithExtracted, _ := lookupKey(parent, s)
+
+			if parentWithExtracted[1] != nil {
+				child = parentWithExtracted[1]
+				parent = parentWithExtracted[0]
+			} else {
+				child = parentWithExtracted[0]
 			}
+
 		case IndexOp:
 			if len(s.key) > 0 {
 				parent, err = get_key(parent, s.key)
@@ -946,7 +1065,7 @@ func Append(obj interface{}, path string, value interface{}) error {
 				}
 			}
 		default:
-			return fmt.Errorf("not supported append operation %s", s.op)
+			return fmt.Errorf("not support append operation %s", s.op)
 		}
 
 		if i != lastStepIdx {
@@ -955,20 +1074,41 @@ func Append(obj interface{}, path string, value interface{}) error {
 	}
 
 	last := c.steps[lastStepIdx]
+	updatedKey := last.key
+
 	childVal := reflect.ValueOf(child)
-	if childVal.Kind() != reflect.Slice {
-		return fmt.Errorf("not supported append operation for %v", child)
-
+	parentVal := reflect.ValueOf(parent)
+	if reflect.DeepEqual(childVal, parentVal) {
+		return fmt.Errorf("incorrect object lookup")
 	}
-	newSlice := reflect.Append(childVal, reflect.ValueOf(value))
-
-	switch reflect.ValueOf(parent).Kind() {
+	var newValue reflect.Value
+	switch childVal.Kind() {
 	case reflect.Map:
-		reflect.ValueOf(parent).SetMapIndex(reflect.ValueOf(last.key), newSlice)
+		newKey, ok := last.args.(string)
+		if !ok {
+			return fmt.Errorf("incorrect append operation, key must be a string, got: %v", last.args)
+		}
+		childVal.SetMapIndex(reflect.ValueOf(newKey), reflect.ValueOf(value))
+		newValue = childVal
+		last.args = nil
+
 	case reflect.Slice:
-		sliceValue := reflect.ValueOf(parent)
+		newValue = reflect.Append(childVal, reflect.ValueOf(value))
+	default:
+		return fmt.Errorf("not support append operation for %v", child)
+	}
+
+	switch parentVal.Kind() {
+	case reflect.Map:
+
+		newKey, ok := last.args.(string)
+		if ok {
+			updatedKey = newKey
+		}
+		parentVal.SetMapIndex(reflect.ValueOf(updatedKey), newValue)
+	case reflect.Slice:
 		idx := last.args.([]int)[0]
-		sliceValue.Index(idx).Set(newSlice)
+		parentVal.Index(idx).Set(newValue)
 	}
 
 	return nil

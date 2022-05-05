@@ -1310,7 +1310,74 @@ func Test_Set(t *testing.T) {
 
 }
 
+func Test_SetWithQuotes(t *testing.T) {
+	var data = map[string]interface{}{
+		"t": 1,
+	}
+	err := Set(&data, "$.radio['a']", 3)
+	if err != nil {
+		t.Errorf("failed to set a: %v", err)
+	}
+	err = Set(&data, "$.radio['b']", 1)
+	if err != nil {
+		t.Errorf("failed to set b: %v", err)
+	}
+	r := data["radio"].(map[string]interface{})
+	if a, found := r["a"]; !found || a.(int) != 3 {
+		t.Error("not found: a")
+	}
+	if b, found := r["b"]; !found || b.(int) != 1 {
+		t.Error("not found: b")
+	}
+
+	complexJson := []byte(`{"radioChannels": {
+		"xxc": {
+		  "count": 122,
+		  "discriminator": {
+			"oneOf": [
+			  1,
+			  3,
+			  444444,
+			  444444
+			]
+		  },
+		  "main": [
+			"Arm2"
+		  ]
+		}
+	  }}
+	  `)
+	var object interface{}
+	if err := json.Unmarshal(complexJson, &object); err != nil {
+		t.Error(err)
+	}
+	complexPath := "$.radioChannels['xxc'].discriminator.oneOf"
+	newOneOf := []int{1, 2, 3}
+	if err := Set(&object, complexPath, newOneOf); err != nil {
+		t.Error(err)
+	}
+	if extracted, err := JsonPathLookup(&object, complexPath); err != nil {
+		t.Error(err)
+	} else {
+		if !reflect.DeepEqual(extracted.([]int), newOneOf) {
+			t.Error("incorrect set new one of", extracted)
+		}
+	}
+}
+func Test_SetFiltered(t *testing.T) {
+	filteredBefore, _ := JsonPathLookup(&json_data, "$.store.book[?(@.price > 10)].price")
+	err := Set(&json_data, "$.store.book[?(@.price > 10)].price", 42)
+	if err != nil {
+		t.Errorf("failed to set filtered: %v", err)
+	}
+	filteredAfter, _ := JsonPathLookup(&json_data, "$.store.book[?(@.price == 42)].price")
+	if reflect.ValueOf(filteredBefore).Len() != reflect.ValueOf(filteredAfter).Len() {
+		t.Error("incorrect filtering")
+	}
+}
+
 func Test_Del(t *testing.T) {
+	uid := "231841AA-3CEF-4F6C-9824-71B6A6C71D22"
 	var data = map[string]interface{}{
 		"user": map[string]interface{}{
 			"firstname": "seth",
@@ -1318,6 +1385,7 @@ func Test_Del(t *testing.T) {
 		},
 		"age": 35,
 		"filmography": map[string]interface{}{
+			uid: 1,
 			"movies": []string{
 				"This Is The End",
 				"Superbad",
@@ -1335,9 +1403,31 @@ func Test_Del(t *testing.T) {
 	del("$.user", "user")
 	del("$.age", "age")
 
+	if err := Del(&data, fmt.Sprintf("$.filmography['%s']", uid)); err != nil {
+		t.Error(err)
+	}
+	fm := data["filmography"].(map[string]interface{})
+	if _, found := fm[uid]; found {
+		t.Errorf("uid was not been deleted")
+	}
+
 	err := Del(&data, "$.filmography.movies")
 	if err != nil {
 		t.Error(err)
+	}
+}
+
+func Test_DeleteFromSlice(t *testing.T) {
+	data := []int{1, 2, 3}
+	root := map[string]interface{}{
+		"slice": data,
+		"other": 2,
+	}
+	if err := Del(&root, "$.slice[0]"); err != nil {
+		t.Error(err)
+	}
+	if len(root["slice"].([]int)) == 3 {
+		t.Error("slice element was not deleted")
 	}
 }
 
@@ -1363,7 +1453,7 @@ func Test_Append(t *testing.T) {
 		t.Fail()
 	}
 
-	err = Append(&data, "$.strValues.str", "third")
+	err = Append(&data, "$.strValues.notExists", "third")
 	if err == nil {
 		t.Error("founded not exists key")
 	}
@@ -1371,6 +1461,30 @@ func Test_Append(t *testing.T) {
 	err = Append(&data, "$.strValues[1]", "third")
 	if err != nil {
 		t.Error(err)
+	}
+}
+
+func Test_AppendToMap(t *testing.T) {
+	data := map[string]interface{}{
+		"value": map[string]interface{}{
+			"v1": 1,
+			"v2": 2,
+		},
+		"strValue": "strVal",
+	}
+	err := Append(&data, "$.value['v3']", []int{3})
+	if err != nil {
+		t.Error(err)
+	}
+	if data["value"].(map[string]interface{})["v3"].([]int)[0] != 3 {
+		t.Errorf("incorrect append to map")
+	}
+	err = Append(&data, "$.value['v3']", 2)
+	if err != nil {
+		t.Error(err)
+	}
+	if data["value"].(map[string]interface{})["v3"].([]int)[1] != 2 {
+		t.Errorf("incorrect append into slice in map")
 	}
 }
 
@@ -1387,10 +1501,7 @@ func Test_GetWildcard(t *testing.T) {
 			{"second"},
 		},
 	}
-	p := MustCompile("$")
-	if p.String() == "" {
-		t.Fail()
-	}
+	p, _ := Compile("$")
 	d, err := p.Lookup(&data)
 	if err != nil {
 		t.Error(err)
